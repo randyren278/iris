@@ -134,7 +134,7 @@ mouth, senses, and judgment about when to speak.
      └─────────┬──────────┘   └───────┬─────────────────┘
                │                      │
                │      ┌───────────────▼──────────────┐
-               │      │  QUARANTINE (Q-LLM)          │  NEW — project 5
+               │      │  QUARANTINE (Q-LLM)          │  NEW — project 3
                │      │  untrusted content, no tools │
                │      └───────────────┬──────────────┘
                │                      │ symbolic refs only
