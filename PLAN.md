@@ -265,7 +265,7 @@ checkpoint:
       run: "cd \"/Users/randyren/Developer/second brain/hera\" && .venv/bin/python -c \"import sys; sys.path.insert(0,'scripts'); import hera_db; c=hera_db.connect(); n=c.execute(\\\"select count(*) from pages where trust is null or trust=''\\\").fetchone()[0]; assert n==0, f'{n} pages missing trust'\""
       expect: "exit 0"
     - name: page-count-unchanged
-      run: "cd \"/Users/randyren/Developer/second brain/hera\" && .venv/bin/python -c \"import sys; sys.path.insert(0,'scripts'); import hera_db; c=hera_db.connect(); print(c.execute('select count(*) from pages').fetchone()[0])\" | diff - <(grep -oE 'pages: [0-9]+' baseline-hera-e2e.txt | grep -oE '[0-9]+')"
+      run: "cd \"/Users/randyren/Developer/second brain/hera\" && .venv/bin/python -c \"import sys,re,pathlib; sys.path.insert(0,'scripts'); import hera_db; c=hera_db.connect(); now=c.execute('select count(*) from pages').fetchone()[0]; base=int(re.search(r'pages: ([0-9]+)', pathlib.Path('/Users/randyren/Developer/remote control/baseline-hera-e2e.txt').read_text()).group(1)); assert now==base, 'page count changed'\""
       expect: "exit 0"
 ```
 

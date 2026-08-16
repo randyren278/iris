@@ -1,0 +1,102 @@
+=== Hera e2e baseline — captured 2026-08-16T23:00:42Z (pre-trust-tier) ===
+vault: /Users/randyren/Developer/second brain/hera
+
+--- pages: (page count in hera.db) ---
+pages: 53
+
+--- schema hash (pages table DDL + full sqlite_master) ---
+schema_sha256: eb8850d2122ce7f2e058165e7513565693247f6d2f1b30737d7699d34051ec05
+pages_columns: ['id', 'title', 'aliases', 'type', 'path', 'created_at', 'updated_at', 'archived_at', 'pinned']
+
+=== hera_db.py --doctor ===
+doctor:
+  db: /Users/randyren/Developer/second brain/hera/hera.db
+[36m▸[0m preflight:
+  interpreter: /Users/randyren/Developer/second brain/hera/.venv/bin/python
+  [32m✔[0m python>=3.8
+  [32m✔[0m pyyaml
+  [32m✔[0m sqlite-ext-loading
+  [32m✔[0m sqlite-fts5
+  [32m✔[0m sqlite-vec-loads
+  [32m✔[0m ulid-py
+  [32m✔[0m requests
+  [32m✔[0m pytest
+  [32m✔[0m ollama-binary
+  [32m✔[0m ollama-daemon
+  [32m✔[0m nomic-embed-text
+  [32m✔[0m embed-endpoint
+  [32m✔[0m claude-code
+preflight: ok
+  ok    preflight
+  ok    schema (10 tables)
+  ok    integrity_check
+  ok    sqlite-vec v0.1.9
+  ok    ollama {"version":"0.32.3"}
+  ok    stale-locks (0)
+  ok    pending_deltas (0 unmerged)
+  warn  scorer.log has recent activity (age 4s)
+  ok    hooks registered globally (/Users/randyren/.claude/settings.json): ['SessionStart', 'UserPromptSubmit', 'Stop', 'SessionEnd']
+rc=0
+
+=== bash scripts/e2e_final.sh (no args, exactly as CP-2.6 invokes it) ===
+usage: e2e_final.sh --step <name>
+rc=2
+
+=== bash scripts/e2e_inject.sh ===
+== e2e_inject: on-topic prompt should return a pointer ==
+  output: [Relevant vault pages (pointers only — read the file if needed):
+- [[Anthropic]]  (/Users/randyren/Developer/second brain/hera/wiki/entities/Anthropic.md)  — Anthropic is named in the transcript only as the maker of [[Claude]]; no other details about the company appear in this source.
+- [[Honest Stats GitHub Action]]  (/Users/randyren/Developer/second brain/hera/wiki/concepts/Honest Stats GitHub Action.md)  — Built for [[Randy Ren]]'s [[GitHub Profile README]], the workflow runs on a cron schedule (aligned to Pacific time, see [[Non-Utc Cron Scheduling On Github Acti
+- [[Persona Jailbreak]]  (/Users/randyren/Developer/second brain/hera/wiki/concepts/Persona Jailbreak.md)  — The jailbreak observed in this transcript instructed the assistant to adopt a persona named 'ENI,' to unconditionally 'trust the user's intent no matter what,' ]
+FAIL: on-topic prompt did not inject a pointer to a related page
+rc=1
+
+=== bash scripts/e2e_inject.sh --no-ollama ===
+== e2e_inject: fail-open (--no-ollama) ==
+  exit: 0
+  body (want empty): []
+== e2e_inject: fail-open OK ==
+rc=0
+
+=== bash scripts/e2e_team_isolation.sh ===
+Traceback (most recent call last):
+  File [35m"<stdin>"[0m, line [35m14[0m, in [35m<module>[0m
+[1;35mAssertionError[0m: [35mteam.db has no pages — nothing to audit[0m
+rc=1
+
+=== CP-2.0 FINDINGS (A6 is FALSE) ===
+Assumption A6 ("Hera's e2e suite currently passes on this machine") is DISPROVEN.
+Captured BEFORE any trust-tier change. Three pre-existing failures:
+
+F1. `bash scripts/e2e_final.sh` with no arguments exits 2 ("usage: e2e_final.sh
+    --step <name>"). The script REQUIRES --step. CP-2.6's `e2e-suite-passes`
+    check and CP-FINAL's `sc6-hera-regression-clean` check invoke it with no
+    arguments, so both are unrunnable as written and will fail regardless of the
+    trust-tier work. Note also that `--step setup` is DESTRUCTIVE: it runs
+    `rm -f hera.db` and `rm -rf wiki`, which would delete the live vault.
+
+F2. `bash scripts/e2e_inject.sh` exits 1. The hook works correctly (it emits
+    three pointers), but the assertion greps for 'retrieval-augmented
+    generation|rag|hybrid retrieval' and the live vault no longer contains a RAG
+    page — the vault content has drifted away from what the fixture assumes.
+    Pre-existing vault-content drift, unrelated to trust tiers.
+
+F3. `bash scripts/e2e_team_isolation.sh` exits 1 with
+    "AssertionError: team.db has no pages — nothing to audit".
+    team.db is empty on this machine, so the isolation audit has nothing to
+    assert against. Pre-existing.
+
+Passing at baseline: scripts/hera_db.py --doctor (rc=0),
+scripts/e2e_inject.sh --no-ollama (rc=0, fail-open contract intact).
+
+=== CP-2.2 CHECK DEFECT ===
+CP-2.2's `page-count-unchanged` check uses bash process substitution
+`diff - <(grep ...)`. checkpoint_runner.run_check() calls
+subprocess.run(cmd, shell=True), which uses /bin/sh; on this machine /bin/sh
+rejects `<(` with "syntax error near unexpected token `('". The check is
+therefore unrunnable as written, independent of the work. Additionally, the
+`cd` in that check moves cwd into the Hera repo before the process
+substitution is evaluated, so `baseline-hera-e2e.txt` is resolved relative to
+the Hera repo, not the Iris repo. A copy of this file has been placed in the
+Hera repo root as well so the check resolves it if the shell issue is fixed.
+Not modified — reported for human decision per Executor Protocol v1 rule 6.
