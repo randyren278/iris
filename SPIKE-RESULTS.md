@@ -4,13 +4,14 @@ Executed 2026-08-17 on macOS 26.5.2 (build 25F84), Apple Silicon.
 Python 3.13.13 at `/opt/homebrew/opt/python@3.13/libexec/bin/python3` (= `python3` on PATH).
 Claude Code 2.1.220.
 
-Order of execution was forced by an external blocker: **Full Disk Access is not
-granted**, so CP-1.3 and CP-1.4 ran first and CP-1.1 / CP-1.2 are blocked.
+Order of execution was forced by an external blocker: Full Disk Access was not
+granted, so CP-1.3 and CP-1.4 ran first. **FDA was granted 2026-08-17 and the
+terminal relaunched; CP-1.1 and CP-1.2 then passed.**
 
 | Checkpoint | Assumption | Outcome |
 |---|---|---|
-| CP-1.1 chat.db readable | A1 | **BLOCKED** — Full Disk Access not granted |
-| CP-1.2 AppleScript send | A2 | **SENDING PROVEN** (see Orchestrator Correction below) — still blocked only on FDA for the `chat.db` receipt assertion |
+| CP-1.1 chat.db readable | A1 | **PASS** — 655,615 message rows, read-only, mtime unchanged |
+| CP-1.2 AppleScript send | A2 | **PASS** — send + `chat.db` receipt, latency < 1s (see A5 below) |
 | CP-1.3 Remote Control link | A3 | **PASS — assumption A3 is TRUE** (plan expected false) |
 | CP-1.4 Mac stays reachable | A4 | **PASS** |
 
@@ -480,12 +481,13 @@ timeout — one with the corrected idiom inline, one through the repaired
 `spikes/send_imessage.sh` has been fixed and carries a comment explaining why
 `account`/`participant` is required.
 
-### Caveat — CP-1.2 is NOT yet passed
+### Caveat — resolved 2026-08-17
 
 `exit=0` from `osascript` proves the send was accepted, **not** that it was
-delivered. CP-1.2's `message-lands-in-chatdb` check remains the real proof and
-still requires Full Disk Access. Until FDA is granted, CP-1.2 stays BLOCKED and
-delivery rests on the operator's visual confirmation.
+delivered. CP-1.2's `message-lands-in-chatdb` check is the real proof and
+required Full Disk Access. FDA was granted, and CP-1.2 now passes on that
+check — ROWID 1217683, observed age 0.0s. Delivery no longer rests on the
+operator's visual confirmation.
 
 ### Process note
 
@@ -495,3 +497,64 @@ operator's Messages.app, and correctly documented the fallback cost. Its error
 was concluding the object model was dead after testing only `service`-element
 expressions. The lesson is to vary the idiom before concluding the platform is
 broken.
+
+---
+
+## A5 (unplanned) — `message.text` is NULL for ~99% of rows
+
+Found while making CP-1.2's receipt assertion pass. This was not an assumption
+the plan tracked, and it invalidates the obvious implementation of the P3
+poller, so it is recorded here as a first-class finding.
+
+### The finding
+
+`spikes/assert_sent.py` originally matched on `where text = ?`. That predicate
+matched the message the plan assumed was there, and matched nothing in reality:
+
+| rows | total | `text IS NULL` | share |
+|---|---|---|---|
+| outbound (`is_from_me=1`) | 314,995 | 313,404 | 99.5% |
+| inbound (`is_from_me=0`) | 340,622 | 338,316 | 99.3% |
+
+The body is in `message.attributedBody`, an `NSAttributedString` serialised as
+a NeXT/Apple **typedstream** (not a plist, not JSON — `plistlib` will not read
+it). The plain `text` column is populated only incidentally.
+
+**Consequence for P3:** any poller that reads `message.text` will see a stream
+that is ~99% empty and will silently ignore nearly every command sent to it.
+The failure is silent, which is the dangerous part — no error, just no reply.
+
+### The decoder
+
+`spikes/chatdb_text.py` extracts the string payload without deserialising the
+whole archive:
+
+    ... NSString <refbyte> \x84 \x01 + <length> <utf-8 bytes> ...
+
+`<refbyte>` is a typedstream object-reference counter and varies with the class
+chain — `\x94` for `NSAttributedString`/`NSString`, `\x95` for the
+`NSMutableAttributedString`/`NSMutableString` variant. Matching it literally
+decodes only 86% of rows; it is matched as a wildcard. `<length>` is a single
+byte under 128, otherwise a `\x81`/`\x82`/`\x83` tag plus 2/3/4 little-endian
+length bytes (the long form appears above 127 bytes).
+
+### Validation
+
+The rows carrying **both** `text` and `attributedBody` are the only available
+ground truth. Decoding every one of them in the live `chat.db`:
+
+    checked 3897: exact=3897 mismatch=0 undecodable=0
+
+Zero mismatches is the property that matters: an unrecognised layout returns
+`None` rather than a wrong string, so a caller can fall back to `text` instead
+of acting on a bad read. `message_body(text, attributedBody)` implements that
+preference order.
+
+### Caveat
+
+3,897 ground-truth rows are self-selecting — they are the ones where Messages
+populated both columns. Rows with attachments, or with a `text` of `￼`
+(the object-replacement character used for inline images), still decode to
+that same placeholder; **A5 covers message bodies, not attachments.** Deciding
+what the poller does with an attachment-only message is still open and belongs
+to CP-3.2.
