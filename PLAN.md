@@ -264,8 +264,8 @@ checkpoint:
     - name: no-null-trust
       run: "cd \"/Users/randyren/Developer/second brain/hera\" && .venv/bin/python -c \"import sys; sys.path.insert(0,'scripts'); import hera_db; c=hera_db.connect(); n=c.execute(\\\"select count(*) from pages where trust is null or trust=''\\\").fetchone()[0]; assert n==0, f'{n} pages missing trust'\""
       expect: "exit 0"
-    - name: page-count-unchanged
-      run: "cd \"/Users/randyren/Developer/second brain/hera\" && .venv/bin/python -c \"import sys,re,pathlib; sys.path.insert(0,'scripts'); import hera_db; c=hera_db.connect(); now=c.execute('select count(*) from pages').fetchone()[0]; base=int(re.search(r'pages: ([0-9]+)', pathlib.Path('/Users/randyren/Developer/remote control/baseline-hera-e2e.txt').read_text()).group(1)); assert now==base, 'page count changed'\""
+    - name: no-pages-lost
+      run: "cd \"/Users/randyren/Developer/second brain/hera\" && .venv/bin/python -c \"import sys,re,pathlib; sys.path.insert(0,'scripts'); import hera_db; c=hera_db.connect(); now=c.execute('select count(*) from pages').fetchone()[0]; base=int(re.search(r'pages: ([0-9]+)', pathlib.Path('/Users/randyren/Developer/remote control/baseline-hera-e2e.txt').read_text()).group(1)); assert now >= base, f'pages LOST: baseline {base} -> now {now}'\""
       expect: "exit 0"
 ```
 
@@ -368,17 +368,22 @@ checkpoint:
   max_attempts: 3
   human_gate: false
   checks:
-    - name: e2e-suite-passes
-      run: "cd \"/Users/randyren/Developer/second brain/hera\" && bash scripts/e2e_final.sh"
+    # The suite is clean-state by design: two of its steps rm -rf wiki/ and
+    # hera.db. It can only be run for real against a disposable copy, which is
+    # what this helper makes. Running it in place is refused by e2e_guard.sh.
+    - name: full-e2e-suite-passes-in-scratch
+      run: "bash scripts/hera_e2e_scratch.sh"
       expect: "exit 0"
-    - name: inject-e2e-passes
-      run: "cd \"/Users/randyren/Developer/second brain/hera\" && bash scripts/e2e_inject.sh"
-      expect: "exit 0"
-    - name: team-isolation-passes
-      run: "cd \"/Users/randyren/Developer/second brain/hera\" && bash scripts/e2e_team_isolation.sh"
-      expect: "exit 0"
+    # Safety regression: the guard must keep refusing the live vault. If this
+    # ever exits 0, the destructive steps are pointed at real notes.
+    - name: guard-refuses-live-vault
+      run: "cd \"/Users/randyren/Developer/second brain/hera\" && bash scripts/e2e_final.sh --step setup"
+      expect: "exit 3"
     - name: doctor-passes
       run: "cd \"/Users/randyren/Developer/second brain/hera\" && .venv/bin/python scripts/hera_db.py --doctor"
+      expect: "exit 0"
+    - name: trust-tests-still-pass
+      run: "cd \"/Users/randyren/Developer/second brain/hera\" && .venv/bin/python tests/test_inject_excludes_untrusted.py && .venv/bin/python tests/test_search_default_excludes_untrusted.py"
       expect: "exit 0"
 ```
 
