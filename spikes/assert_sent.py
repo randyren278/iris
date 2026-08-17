@@ -12,8 +12,8 @@ import pathlib
 import sqlite3
 import sys
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from chatdb_text import message_body  # noqa: E402
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+from iris.chatdb import message_body  # noqa: E402
 
 CHATDB = pathlib.Path.home() / "Library/Messages/chat.db"
 APPLE_EPOCH = dt.datetime(2001, 1, 1, tzinfo=dt.timezone.utc)

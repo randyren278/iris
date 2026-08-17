@@ -11,7 +11,7 @@ terminal relaunched; CP-1.1 and CP-1.2 then passed.**
 | Checkpoint | Assumption | Outcome |
 |---|---|---|
 | CP-1.1 chat.db readable | A1 | **PASS** — 655,615 message rows, read-only, mtime unchanged |
-| CP-1.2 AppleScript send | A2 | **PASS** — send + `chat.db` receipt, latency < 1s (see A5 below) |
+| CP-1.2 AppleScript send | A2 | **PASS** — send + `chat.db` receipt, latency < 1s (see A9 below) |
 | CP-1.3 Remote Control link | A3 | **PASS — assumption A3 is TRUE** (plan expected false) |
 | CP-1.4 Mac stays reachable | A4 | **PASS** |
 
@@ -500,7 +500,7 @@ broken.
 
 ---
 
-## A5 (unplanned) — `message.text` is NULL for ~99% of rows
+## A9 (unplanned) — `message.text` is NULL for ~99% of rows
 
 Found while making CP-1.2's receipt assertion pass. This was not an assumption
 the plan tracked, and it invalidates the obvious implementation of the P3
@@ -555,6 +555,6 @@ preference order.
 3,897 ground-truth rows are self-selecting — they are the ones where Messages
 populated both columns. Rows with attachments, or with a `text` of `￼`
 (the object-replacement character used for inline images), still decode to
-that same placeholder; **A5 covers message bodies, not attachments.** Deciding
+that same placeholder; **A9 covers message bodies, not attachments.** Deciding
 what the poller does with an attachment-only message is still open and belongs
 to CP-3.2.

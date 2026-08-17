@@ -1,0 +1,13 @@
+[project]
+name = "iris"
+version = "0.1.0"
+description = "Text-message gateway to local coding agents"
+requires-python = ">=3.13"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest==9.1.1"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

@@ -44,6 +44,7 @@ Ship a launchd-managed daemon that lets the operator start and steer Claude Code
 - **A6:** Hera's e2e suite currently passes on this machine. → validated at **CP-2.0** (baseline captured before any change)
 - **A7:** Claude Code's `PreToolUse` hook can block on a network call long enough for a human to reply by text. → validated at **CP-5.2**
 - **A8:** Codex's experimental `remote-control` interface is stable enough to wrap. Accepted risk — isolated behind an adapter, and CP-4.6 is the only checkpoint that depends on it.
+- **A9 (unplanned, found at CP-1.2):** ~~`message.text` holds the message body.~~ **FALSE.** `message.text` is NULL for 99.5% of outbound and 99.3% of inbound rows in the live `chat.db`; the body is in `message.attributedBody` as an NSAttributedString **typedstream** (not a plist — `plistlib` will not read it). **A poller reading `message.text` sees a ~99% empty stream and silently drops nearly every command, with no error.** Decoder implemented in `spikes/chatdb_text.py`, validated at 3897/3897 exact with 0 mismatches against every ground-truth row; it returns `None` on an unrecognised layout rather than a wrong string. Two consequences: (1) it moves into the real poller at **CP-3.1**, and (2) **the fake `chat.db` harness must inject `attributedBody` with `text` NULL**, or every downstream phase is verified against a fake that is unrealistically easy and the real poller fails in production. Enforced by `fakedb-matches-a9-null-text` at CP-3.1. Attachments are out of scope for A9 — see CP-3.2.
 
 ## Phase map
 
@@ -415,16 +416,22 @@ checkpoint:
   human_gate: false
   checks:
     - name: package-imports
-      run: "python3 -c 'import iris; print(iris.__version__)'"
+      run: ".venv/bin/python -c 'import iris; print(iris.__version__)'"
       expect: "exit 0"
     - name: fakedb-roundtrip
-      run: "python3 -m pytest tests/test_fakedb.py -q"
+      run: ".venv/bin/python -m pytest tests/test_fakedb.py -q"
       expect: "exit 0"
     - name: fakedb-schema-matches-real
-      run: "python3 tests/assert_schema_parity.py"
+      run: ".venv/bin/python tests/assert_schema_parity.py"
+      expect: "exit 0"
+    # Added after A9. The fake must reproduce the real chat.db's NULL-text /
+    # attributedBody behaviour, otherwise every later phase is verified against
+    # a fake that is far easier than production and the real poller fails.
+    - name: fakedb-matches-a9-null-text
+      run: ".venv/bin/python -m pytest tests/test_fakedb_a9.py -q"
       expect: "exit 0"
     - name: test-suite-runs
-      run: "python3 -m pytest -q"
+      run: ".venv/bin/python -m pytest -q"
       expect: "exit 0"
 ```
 
