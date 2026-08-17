@@ -10,7 +10,7 @@ granted**, so CP-1.3 and CP-1.4 ran first and CP-1.1 / CP-1.2 are blocked.
 | Checkpoint | Assumption | Outcome |
 |---|---|---|
 | CP-1.1 chat.db readable | A1 | **BLOCKED** — Full Disk Access not granted |
-| CP-1.2 AppleScript send | A2 | **BLOCKED** — needs FDA, *and* the Messages scripting object model is timing out (`-1712`) — A2 at risk |
+| CP-1.2 AppleScript send | A2 | **SENDING PROVEN** (see Orchestrator Correction below) — still blocked only on FDA for the `chat.db` receipt assertion |
 | CP-1.3 Remote Control link | A3 | **PASS — assumption A3 is TRUE** (plan expected false) |
 | CP-1.4 Mac stays reachable | A4 | **PASS** |
 
@@ -431,3 +431,67 @@ the sent row, which is the number to paste here once it runs.
   demonstrated at all because Messages times out on every scripting element.
   Resolve the Messages timeout before starting P3.4 — the sender is on the
   critical path for every success criterion.
+
+---
+
+## Orchestrator Correction — CP-1.2 / A2 (2026-08-17)
+
+**The "A2 is at risk" conclusion above is withdrawn. Sending works.** The
+`-1712` timeouts were real but were caused by the *idiom the spike script used*,
+not by a wedged Messages.app or a macOS 26 regression. Messages.app was never
+restarted; nothing was fixed on the machine.
+
+### What actually breaks, and what doesn't
+
+Re-probed independently. The `service` element is aliased to `account`, but its
+accessors are selectively broken:
+
+| Expression | Result |
+|---|---|
+| `get name of every service` | ❌ `Can't get name of every service` |
+| `1st service whose service type = iMessage` | ❌ hangs → `-1712` |
+| `get {id, service type} of every account` | ❌ `-10000` (compound record) |
+| `get every service` | ✅ returns account ids |
+| `get every account` | ✅ returns account ids |
+| `get id of 1st account whose service type = iMessage` | ✅ instant → `65CF7048-…` |
+
+Single-property lookups against `account` return instantly. Compound record
+requests and `service`-element accessors fail. The spike script used
+`1st service whose service type = iMessage`, which is in the failing set — so it
+hung before ever reaching `send`.
+
+### The working form
+
+```applescript
+tell application "Messages"
+    set svc to 1st account whose service type = iMessage
+    send msgText to participant targetHandle of svc
+end tell
+```
+
+`account` not `service`; `participant` not `buddy`.
+
+### Evidence
+
+Two probes sent to the operator's own handle, both `exit=0`, no stderr, no
+timeout — one with the corrected idiom inline, one through the repaired
+`spikes/send_imessage.sh`. `bash -n` clean.
+
+`spikes/send_imessage.sh` has been fixed and carries a comment explaining why
+`account`/`participant` is required.
+
+### Caveat — CP-1.2 is NOT yet passed
+
+`exit=0` from `osascript` proves the send was accepted, **not** that it was
+delivered. CP-1.2's `message-lands-in-chatdb` check remains the real proof and
+still requires Full Disk Access. Until FDA is granted, CP-1.2 stays BLOCKED and
+delivery rests on the operator's visual confirmation.
+
+### Process note
+
+The spike's investigation was sound — it correctly distinguished `-1712`
+(timeout) from `-1743` (not authorised), correctly declined to quit the
+operator's Messages.app, and correctly documented the fallback cost. Its error
+was concluding the object model was dead after testing only `service`-element
+expressions. The lesson is to vary the idiom before concluding the platform is
+broken.
