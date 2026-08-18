@@ -69,6 +69,5 @@ only promises enabled behavior:
 - Capability policy is deny-by-default. A new skill can be drafted but is not
   automatically made loadable.
 
-The delivery plans and checkpoints in [`PLAN.md`](../PLAN.md) and
-[`IRIS-MASTER-PLAN.md`](../IRIS-MASTER-PLAN.md) are the source of truth for
-future scope and human acceptance gates.
+The test suite and live acceptance checks are the source of truth for future
+scope and human acceptance gates.

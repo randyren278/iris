@@ -188,11 +188,8 @@ iris/                 gateway, policy, memory, senses, and runtime modules
 scripts/              launchd install / uninstall helpers
 tests/                offline unit, integration, and acceptance coverage
 docs/                 setup, architecture, and operational documentation
-PLAN.md               Slack gateway delivery plan and checkpoint evidence
-IRIS-MASTER-PLAN.md   longer-term personal intelligence plan and guardrails
 ```
 
 The project is intentionally local-first. Before connecting a new provider or
-granting a new capability, start with the relevant boundary in
-[`IRIS-MASTER-PLAN.md`](IRIS-MASTER-PLAN.md), write a deterministic fake-backed
-test, and add a separate live acceptance gate.
+granting a new capability, write a deterministic fake-backed test and add a
+separate live acceptance gate.
