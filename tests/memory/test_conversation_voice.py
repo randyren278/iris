@@ -28,7 +28,7 @@ def test_prompt_allows_light_teasing_only_when_welcome_and_never_when_safety_sen
     prompt = built_prompt()
     assert "light teasing is fine when it's clearly welcome and relevant" in prompt
     assert "never mean-spirited" in prompt
-    assert "never inside a safety-sensitive reply" in prompt
+    assert "no humor or teasing of any kind inside a safety-sensitive reply" in prompt
 
 
 def test_prompt_does_not_force_lowercase_or_import_apple_messages_rules():
