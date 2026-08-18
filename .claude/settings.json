@@ -1,11 +1,1 @@
-{
-  "hooks": {
-    "Stop": [
-      {
-        "hooks": [
-          { "type": "command", "command": "cd \"$CLAUDE_PROJECT_DIR\" && if [ -f .checkpoints/ARMED ]; then p=$(cat .checkpoints/ARMED 2>/dev/null); python3 scripts/checkpoint_runner.py gate --plan \"${p:-PLAN.md}\"; else exit 0; fi" }
-        ]
-      }
-    ]
-  }
-}
+{}
