@@ -99,6 +99,23 @@ Run `hook_probe` after any change to how Iris launches Claude. It costs one
 small model call and is the only thing standing between an isolation flag
 regression and silently unmediated tool calls.
 
+## Safety-invariant checks
+
+These were built for the independent code review and are safe to re-run
+afterward; each proves a specific safety claim against real dependencies or
+real mutated source rather than a fake.
+
+| Command | Verifies | Re-run after |
+| --- | --- | --- |
+| `bash scripts/checks/live_gate.sh` | Keychain, Socket Mode, EventKit, and the approval hook, run in sequence against real dependencies; writes evidence to `.review/live-evidence.md` | Any change to credential loading, the Slack transport, or the approval hook |
+| `bash scripts/checks/live_approval.sh` | A real `claude` subprocess: a tool call is denied with no responder and allowed after `y`, against a real `ApprovalServer` | Any change to `iris/launcher.py`, `iris/approvals.py`, or `iris/approval_hook.py` |
+| `bash scripts/checks/live_deny_paths.sh` | The five fail-closed approval scenarios (daemon absent, unwritable socket, malformed JSON, empty summary, timeout) all deny against a real socket | Any change to the approval protocol or its error handling |
+| `.venv/bin/python scripts/checks/mutation_guard.py --manifest scripts/checks/mutations.yaml --assert-min 14` | Deliberately breaks each `CLAUDE.md` safety invariant in place and asserts the test suite catches it (then restores the source) | Any change to `iris/allowlist.py`, `iris/approvals.py`, `iris/approval_hook.py`, `iris/conversation.py`, `iris/launcher.py`, `iris/slack_config.py`, `iris/grammar.py`, `iris/memory.py`, `iris/main.py`, or `iris/poller.py` |
+
+Upgrading the `claude` or `codex` CLI is also a good reason to re-run all
+four: a CLI update can change flag parsing or default behavior in ways an
+offline fake cannot detect.
+
 ## Disable or remove
 
 To stop and remove the background launch agent and the menu bar indicator

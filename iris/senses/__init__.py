@@ -9,7 +9,9 @@ class SenseStore:
  def ingest_calendar(self,items):
   rows=[dataclasses.asdict(x) for x in items]
   if any(x["trust"]!="untrusted" for x in rows): raise ValueError("sources are quarantined")
-  self.path.parent.mkdir(parents=True,exist_ok=True); self.path.write_text(json.dumps(rows))
+  incoming_sources={x["source_id"] for x in rows}
+  kept=[dataclasses.asdict(x) for x in self.items() if x.source_id not in incoming_sources]
+  self.path.parent.mkdir(parents=True,exist_ok=True); self.path.write_text(json.dumps(kept+rows))
  def items(self): return tuple(SourceItem(**x) for x in json.loads(self.path.read_text())) if self.path.exists() else ()
  def revoke(self,source_id): self.path.write_text(json.dumps([dataclasses.asdict(x) for x in self.items() if x.source_id!=source_id]))
 class CalendarSense:

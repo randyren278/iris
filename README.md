@@ -66,11 +66,13 @@ Nothing crosses from prose to action without that gate. See
 - **Remember carefully.** Durable claims have a provenance record. Corrections
   supersede prior claims; forgetting hides a claim from retrieval while keeping
   an audit-preserving tombstone.
-- **Read narrowly.** The first live sense is macOS Calendar. Source items are
-  kept in an untrusted quarantine and can be revoked without altering the
-  original calendar.
-- **Evaluate proactive help.** Salience currently runs in shadow mode: it
-  scores explainable candidate reminders but does not send them by default.
+- **Read narrowly.** The first live sense is macOS Calendar, verified today by
+  a read-only probe. The `SenseStore` quarantine/revoke pipeline that keeps
+  source items untrusted and revocable is implemented but not yet wired into
+  the daemon.
+- **Evaluate proactive help.** A shadow-mode salience engine that scores
+  explainable candidate reminders without sending them exists but is not yet
+  wired into the daemon.
 - **Require approval.** Claude Code tool calls are mediated by a local
   approval socket. A missing daemon, timeout, malformed request, or `n` is a
   denial. Codex sessions are bounded by a sandbox instead — see

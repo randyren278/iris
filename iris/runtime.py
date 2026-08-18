@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import dataclasses
+import fcntl
 import json
 import os
 import pathlib
@@ -33,13 +34,15 @@ class StatusStore:
     def __init__(self, path: pathlib.Path | str, *, clock=time.time):
         self.path = pathlib.Path(path)
         self._clock = clock
+        self._lock = threading.Lock()
 
     def write(self, status: RuntimeStatus) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(dataclasses.asdict(status), sort_keys=True))
-        os.chmod(temporary, 0o600)
-        temporary.replace(self.path)
+        with self._lock:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = self.path.with_suffix(".tmp")
+            temporary.write_text(json.dumps(dataclasses.asdict(status), sort_keys=True))
+            os.chmod(temporary, 0o600)
+            temporary.replace(self.path)
 
     def read(self) -> RuntimeStatus | None:
         try:
@@ -62,19 +65,32 @@ class SingleInstanceLock:
         self.acquired = False
 
     def acquire(self, *, max_age: float = 300.0) -> bool:
+        # The stale-reclaim path below is check-then-act (rmtree, then mkdir):
+        # not atomic on its own, so two racing reclaimers could both believe
+        # they won. A flock on a fixed companion file makes the whole
+        # decide-and-reclaim section atomic across processes and threads; the
+        # OS releases it automatically if the holder crashes, so it cannot
+        # wedge a future acquire().
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        mutex_path = self.path.with_name(self.path.name + ".mutex")
+        mutex_fd = os.open(mutex_path, os.O_CREAT | os.O_RDWR, 0o600)
         try:
-            self.path.mkdir(parents=True)
-        except FileExistsError:
-            if not self._stale(max_age=max_age):
-                return False
-            shutil.rmtree(self.path, ignore_errors=True)
+            fcntl.flock(mutex_fd, fcntl.LOCK_EX)
             try:
                 self.path.mkdir(parents=True)
             except FileExistsError:
-                return False
-        (self.path / "pid").write_text(str(self._pid()))
-        self.acquired = True
-        return True
+                if not self._stale(max_age=max_age):
+                    return False
+                shutil.rmtree(self.path, ignore_errors=True)
+                try:
+                    self.path.mkdir(parents=True)
+                except FileExistsError:
+                    return False
+            (self.path / "pid").write_text(str(self._pid()))
+            self.acquired = True
+            return True
+        finally:
+            os.close(mutex_fd)
 
     def release(self) -> None:
         if self.acquired:

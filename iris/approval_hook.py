@@ -14,7 +14,7 @@ def main() -> int:
         summary = payload.get("tool_name", "tool call")
         socket_path = os.environ["IRIS_APPROVAL_SOCKET"]
         approved = request_approval(socket_path, str(summary))
-    except (OSError, ValueError, json.JSONDecodeError, KeyError, TypeError):
+    except (OSError, ValueError, json.JSONDecodeError, KeyError, TypeError, AttributeError):
         approved = False
     # PreToolUse hooks require the event-specific nested schema. A plain
     # top-level decision is ignored by current Claude Code releases.

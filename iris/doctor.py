@@ -7,6 +7,8 @@ import pathlib
 
 def ensure_private_state_dir(path: pathlib.Path | str) -> pathlib.Path:
     state_dir = pathlib.Path(path).expanduser()
+    if state_dir.is_symlink():
+        raise OSError(f"refusing to follow symlink at private state dir: {state_dir}")
     state_dir.mkdir(parents=True, exist_ok=True)
     state_dir.chmod(0o700)
     return state_dir

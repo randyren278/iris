@@ -50,7 +50,8 @@ class Message:
         self.is_self_chat = is_self_chat
 
     def __repr__(self):
-        return f"Message(rowid={self.rowid}, handle={self.handle!r}, body={self.body!r})"
+        body_len = len(self.body) if isinstance(self.body, str) else None
+        return f"Message(rowid={self.rowid}, handle={self.handle!r}, body_len={body_len})"
 
 
 class Poller:
@@ -94,19 +95,29 @@ class Poller:
                          if (handle := _normalise_account(account)))
 
     def track_echo(self, chat_guid, text):
-        """Record a successful send so its inbound self-chat copy is ignored."""
+        """Record a successful send so its inbound self-chat copy is ignored.
+
+        Sends are queued per (chat_guid, text) rather than overwritten, so
+        sending the same text twice in a row still suppresses both echoes.
+        """
         if chat_guid and isinstance(text, str):
             now = time.monotonic()
-            self._echoes[(chat_guid, text)] = now
-            for key, sent_at in tuple(self._echoes.items()):
-                if now - sent_at > _ECHO_WINDOW_SECONDS:
+            self._echoes.setdefault((chat_guid, text), []).append(now)
+            for key, timestamps in tuple(self._echoes.items()):
+                fresh = [t for t in timestamps if now - t <= _ECHO_WINDOW_SECONDS]
+                if fresh:
+                    self._echoes[key] = fresh
+                else:
                     del self._echoes[key]
 
     def _consume_echo(self, chat_guid, text):
-        sent_at = self._echoes.get((chat_guid, text))
-        if sent_at is None or time.monotonic() - sent_at > _ECHO_WINDOW_SECONDS:
+        key = (chat_guid, text)
+        timestamps = self._echoes.get(key)
+        if not timestamps or time.monotonic() - timestamps[0] > _ECHO_WINDOW_SECONDS:
             return False
-        del self._echoes[(chat_guid, text)]
+        timestamps.pop(0)
+        if not timestamps:
+            del self._echoes[key]
         return True
 
     def _save_high_water(self, rowid):

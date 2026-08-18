@@ -83,3 +83,11 @@ def test_undecodable_row_is_skipped_not_fatal(fakedb, poller):
     conn.close()
     fakedb.inject("+15551234567", "readable")
     assert [m.body for m in poller.poll_once()] == ["readable"]
+
+
+def test_message_repr_does_not_leak_the_body(fakedb, poller):
+    """repr() is the default stringification reached for in debugging/logging;
+    it must not print raw message content, per CLAUDE.md's no-verbatim-logging rule."""
+    fakedb.inject("+15551234567", "very private content nobody should log")
+    (msg,) = poller.poll_once()
+    assert "very private content nobody should log" not in repr(msg)

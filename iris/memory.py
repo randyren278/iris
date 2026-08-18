@@ -6,6 +6,7 @@ import json
 import os
 import pathlib
 import tempfile
+import threading
 import time
 import uuid
 
@@ -34,6 +35,7 @@ class MemoryStore:
     def __init__(self, path: pathlib.Path | str, *, clock=time.time, ids=lambda: uuid.uuid4().hex):
         self.path = pathlib.Path(path)
         self._clock, self._ids = clock, ids
+        self._lock = threading.Lock()
 
     def remember(self, claim: str, *, source_ref: str, trust: str = "self",
                  authoring_mode: str = "operator_confirmed", confidence: float = 1.0,
@@ -42,27 +44,34 @@ class MemoryStore:
             raise MemoryPolicyError("only explicitly confirmed self/team claims may be remembered")
         if not claim.strip() or not source_ref.strip() or not 0 <= confidence <= 1:
             raise MemoryPolicyError("claim, source reference, and confidence are required")
-        records = self._load()
-        if supersedes and not any(item.id == supersedes for item in records):
-            raise MemoryPolicyError("superseded record does not exist")
-        now = self._clock()
-        record = MemoryRecord(self._ids(), claim.strip(), source_ref.strip(), trust, authoring_mode,
-                              confidence, now, now, supersedes=supersedes)
-        self._save([*records, record])
+        with self._lock:
+            records = self._load()
+            if supersedes and supersedes not in self._live_ids(records):
+                raise MemoryPolicyError("superseded record is not an active memory")
+            now = self._clock()
+            record = MemoryRecord(self._ids(), claim.strip(), source_ref.strip(), trust, authoring_mode,
+                                  confidence, now, now, supersedes=supersedes)
+            self._save([*records, record])
         return record
 
     def correct(self, record_id: str, claim: str, *, source_ref: str) -> MemoryRecord:
         return self.remember(claim, source_ref=source_ref, supersedes=record_id)
 
     def forget(self, record_id: str) -> MemoryRecord:
-        records = self._load()
-        for index, item in enumerate(records):
-            if item.id == record_id:
-                tombstone = dataclasses.replace(item, lifecycle="forgotten", updated_at=self._clock())
-                records[index] = tombstone
-                self._save(records)
-                return tombstone
-        raise MemoryPolicyError("memory record does not exist")
+        with self._lock:
+            records = self._load()
+            for index, item in enumerate(records):
+                if item.id == record_id:
+                    tombstone = dataclasses.replace(item, lifecycle="forgotten", updated_at=self._clock())
+                    records[index] = tombstone
+                    self._save(records)
+                    return tombstone
+            raise MemoryPolicyError("memory record does not exist")
+
+    @staticmethod
+    def _live_ids(records: list[MemoryRecord]) -> set[str]:
+        hidden = {item.supersedes for item in records if item.supersedes}
+        return {item.id for item in records if item.lifecycle == "active" and item.id not in hidden}
 
     def retrieve(self, query: str = "") -> tuple[MemoryRecord, ...]:
         terms = set(query.lower().split())

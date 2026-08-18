@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import threading
 import time
 from collections.abc import Callable, Iterable
 
@@ -73,14 +74,19 @@ class SlackGateway:
         self.on_inbound = on_inbound
         self.on_outbound = on_outbound
         self._seen_event_ids: set[str] = set()
+        self._dedupe_lock = threading.Lock()
 
     def handle_envelope(self, envelope: dict) -> bool:
         message = SlackMessage.from_envelope(envelope)
         if message is None:
             return False
-        if message.event_id in self._seen_event_ids:
-            return False
-        self._seen_event_ids.add(message.event_id)
+        # Socket Mode dispatches listeners from a thread pool, so retries of
+        # the same event can arrive on different threads concurrently; the
+        # check-then-add below must be atomic or both can pass.
+        with self._dedupe_lock:
+            if message.event_id in self._seen_event_ids:
+                return False
+            self._seen_event_ids.add(message.event_id)
         if message.channel_type != "im" or message.bot_id or message.subtype:
             return False
         if message.user_id not in self.allowed_user_ids:

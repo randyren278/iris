@@ -26,9 +26,11 @@ class FallbackTranslator:
     def propose(self, text: str) -> Proposal | None:
         raw = self._translator(text)
         if not isinstance(raw, dict) or set(raw) != {"command"} or not isinstance(raw["command"], str):
+            self._proposal = None
             return None
         command = parse(raw["command"])
         if command is None:
+            self._proposal = None
             return None
         now = self._clock()
         self._proposal = Proposal(command, now, now + self._ttl_seconds)

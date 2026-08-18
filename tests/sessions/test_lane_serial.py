@@ -20,3 +20,22 @@ def test_same_session_work_is_serialized():
     second.result(1)
     lanes.shutdown()
     assert order == ["first", "done", "second"]
+
+
+def test_lane_recovers_after_a_failed_job():
+    """A failed job must not permanently poison the lane for later submissions."""
+    lanes = SessionLanes()
+
+    def boom():
+        raise ValueError("boom")
+
+    first = lanes.submit(1, boom)
+    try:
+        first.result(1)
+        assert False, "expected ValueError"
+    except ValueError:
+        pass
+
+    second = lanes.submit(1, lambda: "ok")
+    assert second.result(1) == "ok"
+    lanes.shutdown()

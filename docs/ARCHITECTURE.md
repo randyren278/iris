@@ -175,7 +175,7 @@ treat a Codex session as sandbox-bounded rather than approval-gated.
 | Runtime state, sessions, audit, memory | `~/.iris/` | directory is created mode `0700`; atomic state files use mode `0600` where implemented |
 | Approved memory claims | `~/.iris/memory.json` | only explicitly confirmed `self` or `team` claims are retrievable |
 | Corrected / forgotten claims | same memory ledger | correction adds a superseding record; forgetting replaces the record with a tombstone |
-| Calendar source metadata | operator-selected local store | quarantined as `untrusted`; source revocation removes that source's stored items |
+| Calendar source metadata | operator-selected local store | `SenseStore` quarantines items as `untrusted` with source revocation, but this store is not yet wired into the daemon — only the read-only probe runs today |
 | Audit records | `~/.iris/audit.jsonl` | append-only rotation; rejected inbound text is represented only by SHA-256 digest |
 
 Trusted context injected into a conversation may only be `self` or `team`

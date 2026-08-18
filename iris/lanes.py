@@ -17,7 +17,7 @@ class SessionLanes:
 
             def run():
                 if previous is not None:
-                    previous.result()
+                    previous.exception()  # wait for it, but a failure there must not block this job
                 return function(*args, **kwargs)
 
             future = self._executor.submit(run)

@@ -69,11 +69,17 @@ class Launcher:
                     }]}]}
                 }
                 command.extend(["--settings", json.dumps(settings, separators=(",", ":"))])
-            return command if self._streaming else [*command, prompt]
+            # "--" marks end-of-options so a prompt that happens to spell a
+            # real flag (e.g. "--dangerously-skip-permissions") is parsed as
+            # literal text, never as that flag.
+            return command if self._streaming else [*command, "--", prompt]
         # `codex exec` is the non-interactive form; the bare interactive CLI
         # exits with "stdin is not a terminal" under launchd. --sandbox on the
         # command line overrides sandbox_mode in ~/.codex/config.toml, so an
         # operator's danger-full-access setting cannot widen an Iris session.
-        # The model stays unpinned and comes from that same config.
+        # The model stays unpinned and comes from that same config. "--"
+        # keeps a prompt that spells a real flag (e.g.
+        # "--dangerously-bypass-approvals-and-sandbox") from being parsed as
+        # that flag instead of literal text.
         return ["codex", "exec", "--sandbox", CODEX_SANDBOX, "--skip-git-repo-check",
-                "--json", prompt]
+                "--json", "--", prompt]

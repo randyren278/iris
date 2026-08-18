@@ -45,3 +45,17 @@ def test_non_self_inbound_copy_is_not_granted_self_chat_access(fakedb, tmp_path)
 
     (message,) = poller.poll_once()
     assert not message.is_self_chat
+
+
+def test_two_identical_echoed_sends_are_both_suppressed(fakedb, tmp_path):
+    """track_echo is keyed by (chat_guid, text); sending the same text twice
+    before either echoes back must not let the second copy through as a
+    live inbound command."""
+    poller = Poller(fakedb.path, tmp_path / "state.json", self_chat_guid=SELF_CHAT)
+    poller.poll_once()
+    poller.track_echo(SELF_CHAT, "Iris: done")
+    poller.track_echo(SELF_CHAT, "Iris: done")
+    fakedb.inject(SELF, "Iris: done", chat_guid=SELF_CHAT)
+    fakedb.inject(SELF, "Iris: done", chat_guid=SELF_CHAT)
+
+    assert poller.poll_once() == [], "both of Iris's own echoed sends must be suppressed"

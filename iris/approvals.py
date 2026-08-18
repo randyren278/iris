@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import dataclasses
 import json
-import os
 import pathlib
 import socket
 import threading
@@ -135,5 +134,5 @@ def request_approval(path: pathlib.Path | str, summary: str, *, connect_timeout:
             client.sendall(json.dumps({"summary": summary}).encode() + b"\n")
             response = json.loads(client.makefile("r", encoding="utf-8").readline())
             return response.get("approved") is True
-    except (OSError, ValueError, json.JSONDecodeError):
+    except (OSError, ValueError, json.JSONDecodeError, AttributeError):
         return False
