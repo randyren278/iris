@@ -20,7 +20,13 @@ import sqlite3
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
-from tests.fakedb import HANDLE_COLUMNS, MESSAGE_COLUMNS  # noqa: E402
+from tests.fakedb import (  # noqa: E402
+    CHAT_COLUMNS,
+    CHAT_HANDLE_JOIN_COLUMNS,
+    CHAT_MESSAGE_JOIN_COLUMNS,
+    HANDLE_COLUMNS,
+    MESSAGE_COLUMNS,
+)
 
 REAL = pathlib.Path.home() / "Library/Messages/chat.db"
 
@@ -39,7 +45,10 @@ def main():
 
     problems = []
     for table, declared in (("message", MESSAGE_COLUMNS),
-                            ("handle", HANDLE_COLUMNS)):
+                            ("handle", HANDLE_COLUMNS),
+                            ("chat", CHAT_COLUMNS),
+                            ("chat_message_join", CHAT_MESSAGE_JOIN_COLUMNS),
+                            ("chat_handle_join", CHAT_HANDLE_JOIN_COLUMNS)):
         actual = real_columns(conn, table)
         for name, typ in declared:
             if name not in actual:

@@ -27,10 +27,24 @@ MESSAGE_COLUMNS = [
     ("handle_id", "INTEGER"),
     ("attributedBody", "BLOB"),
     ("service", "TEXT"),
+    ("account", "TEXT"),
     ("date", "INTEGER"),
     ("is_from_me", "INTEGER"),
     ("is_read", "INTEGER"),
     ("cache_has_attachments", "INTEGER"),
+]
+CHAT_COLUMNS = [
+    ("ROWID", "INTEGER"),
+    ("guid", "TEXT"),
+    ("style", "INTEGER"),
+]
+CHAT_MESSAGE_JOIN_COLUMNS = [
+    ("chat_id", "INTEGER"),
+    ("message_id", "INTEGER"),
+]
+CHAT_HANDLE_JOIN_COLUMNS = [
+    ("chat_id", "INTEGER"),
+    ("handle_id", "INTEGER"),
 ]
 HANDLE_COLUMNS = [
     ("ROWID", "INTEGER"),
@@ -80,6 +94,9 @@ class FakeChatDB:
         conn = sqlite3.connect(self.path)
         conn.execute(_ddl("message", MESSAGE_COLUMNS))
         conn.execute(_ddl("handle", HANDLE_COLUMNS))
+        conn.execute(_ddl("chat", CHAT_COLUMNS))
+        conn.execute(_ddl("chat_message_join", CHAT_MESSAGE_JOIN_COLUMNS))
+        conn.execute(_ddl("chat_handle_join", CHAT_HANDLE_JOIN_COLUMNS))
         conn.commit()
         conn.close()
 
@@ -93,7 +110,19 @@ class FakeChatDB:
             "values (?, 'us', 'iMessage', ?)", (handle, handle))
         return cur.lastrowid
 
-    def inject(self, handle, text, is_from_me=0, plain_text=False, when=None):
+    def _chat_id(self, conn, handle_id, chat_guid, chat_style):
+        row = conn.execute("select ROWID from chat where guid = ?", (chat_guid,)).fetchone()
+        if row:
+            return row[0]
+        cur = conn.execute("insert into chat (guid, style) values (?, ?)",
+                           (chat_guid, chat_style))
+        chat_id = cur.lastrowid
+        conn.execute("insert into chat_handle_join (chat_id, handle_id) values (?, ?)",
+                     (chat_id, handle_id))
+        return chat_id
+
+    def inject(self, handle, text, is_from_me=0, plain_text=False, when=None,
+               account="E:operator@icloud.com", chat_guid=None, chat_style=45):
         """Append a row as if the message had just arrived.
 
         Defaults to the real-world A9 shape: text NULL, body in attributedBody.
@@ -105,15 +134,19 @@ class FakeChatDB:
         conn = sqlite3.connect(self.path)
         try:
             hid = self._handle_id(conn, handle)
+            chat_guid = chat_guid or f"iMessage;-;{handle}"
+            chat_id = self._chat_id(conn, hid, chat_guid, chat_style)
             cur = conn.execute(
                 "insert into message (guid, text, handle_id, attributedBody, "
-                "service, date, is_from_me, is_read, cache_has_attachments) "
-                "values (?, ?, ?, ?, 'iMessage', ?, ?, 0, 0)",
+                "service, account, date, is_from_me, is_read, cache_has_attachments) "
+                "values (?, ?, ?, ?, 'iMessage', ?, ?, ?, 0, 0)",
                 (f"fake-{date_ns}-{hid}",
                  text if plain_text else None,
                  hid,
                  None if plain_text else _typedstream(text),
-                 date_ns, is_from_me))
+                 account, date_ns, is_from_me))
+            conn.execute("insert into chat_message_join (chat_id, message_id) values (?, ?)",
+                         (chat_id, cur.lastrowid))
             conn.commit()
             return cur.lastrowid
         finally:
