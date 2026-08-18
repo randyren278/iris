@@ -1,5 +1,5 @@
 from iris.slack import SlackGateway
-from tests.test_slack_echo_e2e import dm_envelope
+from tests.gateway.test_slack_echo_e2e import dm_envelope
 from tests.slack_fakes import RecordingSlackClient
 
 

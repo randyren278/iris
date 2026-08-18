@@ -21,6 +21,18 @@ class ConversationMessage:
     text: str
 
 
+# A conversational turn is short and tool-less, so it does not need the coding
+# model. Pinning it here makes the choice explicit rather than inheriting
+# whatever the operator's CLI happens to default to.
+CONVERSATION_MODEL = "sonnet"
+
+# Without these, a nested `claude -p` loads the operator's settings files and
+# runs their hooks, which sends raw DM transcripts wherever those hooks point
+# and injects unrelated context into Iris's prompt. Bare mode is deliberately
+# not used here: it skips keychain reads and would break subscription auth.
+CLAUDE_ISOLATION = ["--setting-sources", "", "--strict-mcp-config"]
+
+
 class ClaudeTextBackend:
     """A text-only Claude turn. Tool use remains behind explicit Iris controls."""
 
@@ -33,8 +45,8 @@ class ClaudeTextBackend:
         prompt = _prompt(messages, context)
         try:
             result = self._run(
-                ["claude", "--permission-mode", "manual", "--tools", "", "-p",
-                 "--output-format", "json", prompt],
+                ["claude", "--model", CONVERSATION_MODEL, "--permission-mode", "manual",
+                 "--tools", "", *CLAUDE_ISOLATION, "-p", "--output-format", "json", prompt],
                 capture_output=True, text=True, timeout=self.timeout, check=False,
                 env={key: value for key, value in self._environ.items() if not key.startswith("CLAUDE")},
             )

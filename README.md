@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="slack-icon-512.png" width="180" alt="Iris pixel-art icon">
+  <img src="docs/assets/slack-icon-512.png" width="180" alt="Iris pixel-art icon">
 </p>
 
 <h1 align="center">Iris</h1>
@@ -38,6 +38,24 @@ be useful because it pays attention, not because it silently takes control.
 
 ---
 
+## How it fits together
+
+```mermaid
+flowchart LR
+    you["You<br/>private Slack DM"] -- "outbound Socket Mode" --> iris["Iris daemon<br/>on your Mac"]
+    iris -- "plain language" --> talk["Conversation<br/>Sonnet, no tools"]
+    iris -- "explicit command" --> code["Coding session<br/>Claude Code or Codex"]
+    code -- "every tool call" --> gate{"Approve<br/>in Slack?"}
+    gate -- "y" --> run["Tool runs"]
+    gate -- "n, timeout,<br/>or any failure" --> deny["Denied"]
+    talk --> you
+    run --> you
+    deny --> you
+```
+
+Nothing crosses from prose to action without that gate. See
+[Architecture](docs/ARCHITECTURE.md) for the trust boundary and model policy.
+
 ## What it does
 
 - **Converse.** A plain DM is sent to a text-only Claude turn with short-term
@@ -53,9 +71,25 @@ be useful because it pays attention, not because it silently takes control.
   original calendar.
 - **Evaluate proactive help.** Salience currently runs in shadow mode: it
   scores explainable candidate reminders but does not send them by default.
-- **Require approval.** Coding-agent tool calls are mediated by a local
+- **Require approval.** Claude Code tool calls are mediated by a local
   approval socket. A missing daemon, timeout, malformed request, or `n` is a
-  denial.
+  denial. Codex sessions are bounded by a sandbox instead — see
+  [Architecture](docs/ARCHITECTURE.md).
+
+## Which models it uses
+
+Iris holds no API key. It shells out to the `claude` and `codex` CLIs already
+installed and logged in on your Mac, so usage bills to those accounts.
+
+| Path | Model |
+| --- | --- |
+| Conversational DM | Sonnet |
+| Claude Code session | Opus |
+| Codex session | whatever `~/.codex/config.toml` says |
+
+Every Claude subprocess runs with `--setting-sources ""`, so it loads none of
+your settings files and runs none of your hooks. That keeps DM content out of
+unrelated tooling and stops a settings file from weakening the approval path.
 
 ## What it does not do
 
@@ -107,6 +141,11 @@ the background service:
 `~/Library/LaunchAgents/com.iris.gateway.plist`, starts it, and configures a
 minimal runtime `PATH` for the local CLIs. It does not copy credentials or
 project state into the repository.
+
+It also installs the menu bar indicator, a read-only
+[SwiftBar](https://swiftbar.app) plugin that shows at a glance whether the
+daemon is connected. It is optional: without SwiftBar the install prints a note
+and continues. See [Operations](docs/OPERATIONS.md#menu-bar-indicator).
 
 For Calendar’s optional local read-only smoke test, macOS will ask for Calendar
 access the first time you run:
@@ -185,7 +224,7 @@ the safe recovery path after sleep or network loss.
 
 ```text
 iris/                 gateway, policy, memory, senses, and runtime modules
-scripts/              launchd install / uninstall helpers
+scripts/              launchd install / uninstall helpers, menu bar indicator
 tests/                offline unit, integration, and acceptance coverage
 docs/                 setup, architecture, and operational documentation
 ```

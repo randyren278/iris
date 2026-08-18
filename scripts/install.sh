@@ -41,4 +41,5 @@ done
 [ "$bootstrapped" = true ] || { echo "Could not bootstrap $label after 5 attempts." >&2; exit 1; }
 launchctl enable "$domain/$label" 2>/dev/null || true
 launchctl kickstart -k "$domain/$label"
+"$root/scripts/menubar/install-plugin.sh" install
 echo "Iris installed and started. Check: python -m iris.irisctl status"

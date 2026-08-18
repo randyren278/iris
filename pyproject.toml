@@ -9,7 +9,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest==9.1.1"]
+dev = ["pytest==9.1.1", "pyyaml>=6,<7"]
 
 [tool.setuptools.packages.find]
 include = ["iris*"]

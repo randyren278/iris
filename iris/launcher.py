@@ -8,6 +8,18 @@ import shlex
 import subprocess
 import sys
 
+from iris.conversation import CLAUDE_ISOLATION
+
+# Coding sessions do the hard work, so they get the strong model. Codex is left
+# unpinned on purpose: it takes its model from ~/.codex/config.toml, so that
+# choice stays in one place.
+CODING_MODEL = "opus"
+
+# Iris mediates Claude tool calls through the approval socket, but has no
+# equivalent hook for Codex, so the sandbox is the boundary instead: a Codex
+# session may write inside its project and nowhere else.
+CODEX_SANDBOX = "workspace-write"
+
 
 class Launcher:
     def __init__(self, *, popen=subprocess.Popen, environ=None, approval_socket=None,
@@ -39,9 +51,14 @@ class Launcher:
 
     def _command(self, tool: str, prompt: str) -> list[str]:
         if tool == "claude":
-            command = ["claude", "--permission-mode", "manual", "--remote-control"]
+            # Isolation here is a safety boundary, not tidiness: an operator
+            # settings file must not be able to alter the tool-approval path
+            # that --settings installs below.
+            base = ["claude", "--model", CODING_MODEL, "--permission-mode", "manual",
+                    *CLAUDE_ISOLATION]
+            command = [*base, "--remote-control"]
             if self._streaming:
-                command = ["claude", "--permission-mode", "manual", "--input-format", "stream-json",
+                command = [*base, "--input-format", "stream-json",
                            "--output-format", "stream-json", "--include-partial-messages", "--print",
                            "--verbose"]
             if self._approval_socket:
@@ -53,4 +70,10 @@ class Launcher:
                 }
                 command.extend(["--settings", json.dumps(settings, separators=(",", ":"))])
             return command if self._streaming else [*command, prompt]
-        return ["codex", prompt]
+        # `codex exec` is the non-interactive form; the bare interactive CLI
+        # exits with "stdin is not a terminal" under launchd. --sandbox on the
+        # command line overrides sandbox_mode in ~/.codex/config.toml, so an
+        # operator's danger-full-access setting cannot widen an Iris session.
+        # The model stays unpinned and comes from that same config.
+        return ["codex", "exec", "--sandbox", CODEX_SANDBOX, "--skip-git-repo-check",
+                "--json", prompt]

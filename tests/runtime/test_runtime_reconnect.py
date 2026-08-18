@@ -1,7 +1,7 @@
 from iris.runtime import RuntimeSupervisor
 from iris.slack import SlackGateway
 from tests.slack_fakes import RecordingSlackClient
-from tests.test_slack_echo_e2e import dm_envelope
+from tests.gateway.test_slack_echo_e2e import dm_envelope
 
 
 def test_runtime_records_reconnect_and_heartbeat(tmp_path):
