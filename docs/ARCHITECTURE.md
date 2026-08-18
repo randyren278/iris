@@ -94,7 +94,10 @@ flowchart TD
 
 The conversation backend invokes Claude in text-only mode. Its system prompt
 states that it has no tools and must not represent prose as a completed action.
-The command router is the only path that can start a coding session.
+The same prompt also governs Iris's conversational voice (tone-mirroring,
+restrained humor), carrying the same safety carve-out around teasing in any
+safety-sensitive reply. The command router is the only path that can start a
+coding session.
 
 ## Models and isolation
 

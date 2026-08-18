@@ -34,5 +34,18 @@ def test_prompt_allows_light_teasing_only_when_welcome_and_never_when_safety_sen
 def test_prompt_does_not_force_lowercase_or_import_apple_messages_rules():
     prompt = built_prompt()
     assert "don't force lowercase" in prompt
-    assert "Apple Messages-specific formatting rules" in prompt
+    assert "Apple Messages" not in prompt
     assert "strictly lowercase" not in prompt
+
+
+def test_prompt_sections_appear_in_injection_resistant_order():
+    prompt = built_prompt()
+    assert prompt.index("Voice:") < prompt.index("Trusted context:") < prompt.index("Conversation:")
+
+
+def test_prompt_does_not_leak_dangerous_poke_specific_tokens():
+    prompt = built_prompt()
+    assert "Poke" not in prompt
+    assert "roast" not in prompt
+    assert "physical harm" not in prompt
+    assert "Execute immediately" not in prompt
