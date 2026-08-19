@@ -1,20 +1,50 @@
 """Conversation adapter that gives Iris's general runtime thread-local context."""
 from __future__ import annotations
 
+import json
+import pathlib
+import subprocess
+import sys
 from collections import defaultdict, deque
 
 from iris.agent_runtime import AgentReply, AgentRuntime
-from iris.conversation import ConversationMessage, MemoryContext
+from iris.conversation import CLAUDE_ISOLATION, CONVERSATION_MODEL, ConversationMessage, _prompt
 
 
-class TextOnlyAgentAdapter:
-    """Temporary adapter for ordinary prose until the live MCP adapter is enabled."""
+class ClaudeMCPAgentAdapter:
+    """Run an isolated Claude turn with only Iris-owned MCP read tools."""
 
-    def __init__(self, backend, turns, context):
-        self._backend, self._turns, self._context = backend, turns, context
+    TOOL_NAMES = ("mcp__iris__weather", "mcp__iris__web_search", "mcp__iris__web_fetch",
+                  "mcp__iris__workspace", "mcp__iris__senses")
+
+    def __init__(self, workspace_root, senses_path, turns, context, *, run=subprocess.run, timeout=90):
+        self._workspace_root = str(pathlib.Path(workspace_root).resolve())
+        self._senses_path = str(pathlib.Path(senses_path))
+        self._turns, self._context = turns, context
+        self._run, self._timeout = run, timeout
+
+    def command(self) -> list[str]:
+        config = {"mcpServers": {"iris": {"command": sys.executable, "args": [
+            "-m", "iris.mcp_server", "--workspace-root", self._workspace_root,
+            "--senses-path", self._senses_path,
+        ]}}}
+        return ["claude", "--model", CONVERSATION_MODEL, "--permission-mode", "manual",
+                "--tools", ",".join(self.TOOL_NAMES), *CLAUDE_ISOLATION,
+                "--mcp-config", json.dumps(config, separators=(",", ":")), "--strict-mcp-config",
+                "-p", "--output-format", "json", _prompt(self._turns, self._context)]
 
     def next_step(self, _user_text, _results):
-        return AgentReply(self._backend.reply(self._turns, self._context))
+        try:
+            result = self._run(self.command(), capture_output=True, text=True, timeout=self._timeout, check=False)
+        except (OSError, subprocess.TimeoutExpired):
+            return AgentReply("Iris's agent runtime is temporarily unavailable. Please try again shortly.")
+        if result.returncode != 0:
+            return AgentReply("I couldn't complete that agent turn. Please try again.")
+        try:
+            text = json.loads(result.stdout).get("result", "")
+        except json.JSONDecodeError:
+            text = result.stdout
+        return AgentReply(text.strip() or "I don't have a response for that yet.")
 
 
 class GeneralAgentCoordinator:

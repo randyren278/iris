@@ -57,8 +57,8 @@ def main():
     from iris.sessions import SessionController
     from iris.doctor import ensure_private_state_dir
     from iris.runtime import RuntimeSupervisor
-    from iris.conversation import ClaudeTextBackend, MemoryContext
-    from iris.agent_conversation import GeneralAgentCoordinator, TextOnlyAgentAdapter
+    from iris.conversation import MemoryContext
+    from iris.agent_conversation import ClaudeMCPAgentAdapter, GeneralAgentCoordinator
     from iris.agent_runtime import AgentRuntime
     from iris.memory import MemoryStore
     from iris.session_transport import SessionTransport
@@ -101,10 +101,10 @@ def main():
         return tuple(MemoryContext(item.claim, item.trust, item.source_ref)
                      for item in memory.retrieve(query))
 
-    text_backend = ClaudeTextBackend()
     conversation = GeneralAgentCoordinator(
         AgentRuntime({}),
-        lambda _message, turns, context: TextOnlyAgentAdapter(text_backend, turns, context),
+        lambda _message, turns, context: ClaudeMCPAgentAdapter(
+            config.projects_root, state_dir / "senses.json", turns, context),
         context_provider=memory_context,
     )
 
