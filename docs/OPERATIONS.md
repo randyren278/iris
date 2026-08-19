@@ -2,12 +2,10 @@
 
 ## General agent runtime probe
 
-The agent runtime probe is intentionally deferred until its explicit operator
-gate. It uses the local authenticated Claude CLI with Iris's isolated MCP
-configuration and a disposable fake tool server; it does not read Slack
-credentials or contact a Slack workspace. Do not treat deterministic fake
-tests as evidence that the agent runtime probe has passed against the installed
-CLI.
+The agent runtime probe uses the local authenticated Claude CLI with Iris's
+isolated MCP configuration and a disposable fake tool server; it does not read
+Slack credentials or contact a Slack workspace. Deterministic tests are not a
+substitute for this optional installed-CLI compatibility check.
 
 Run the opt-in probes only when you want live evidence:
 

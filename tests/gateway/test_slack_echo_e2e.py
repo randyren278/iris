@@ -34,3 +34,21 @@ def test_transport_uses_configured_command_handler_response():
     gateway.handle_envelope(dm_envelope())
 
     assert client.messages[0]["text"] == "routed reply"
+
+
+def test_transport_splits_long_handler_replies_in_the_origin_thread():
+    client = RecordingSlackClient()
+    gateway = SlackGateway(["U-allowed"], client, handler=lambda _message: "word " * 700,
+                           splitter=lambda _text: ("first", "second"))
+    gateway.handle_envelope(dm_envelope())
+
+    assert [item["text"] for item in client.messages] == ["first", "second"]
+    assert {item["thread_ts"] for item in client.messages} == {"1.1"}
+
+
+def test_transport_returns_safe_error_when_handler_fails():
+    client = RecordingSlackClient()
+    def fail(_message):
+        raise RuntimeError("private message body")
+    SlackGateway(["U-allowed"], client, handler=fail).handle_envelope(dm_envelope())
+    assert client.messages[0]["text"] == "I couldn't complete that request. Please try again."

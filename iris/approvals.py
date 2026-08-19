@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import os
 import pathlib
 import socket
 import threading
@@ -26,22 +27,35 @@ class ApprovalQueue:
         self._next_id = 1
 
     def request(self, summary: str, *, timeout: float, notifier: Callable[[str], None] | None = None) -> bool:
+        notify = notifier or self._notifier
         with self._condition:
-            notify = notifier or self._notifier
             request = PendingApproval(self._next_id, summary)
             self._next_id += 1
             self._pending.append(request)
-            notify(self.render(request))
             deadline = self._clock() + timeout
+        try:
+            notify(self.render(request))
+        except Exception:
+            with self._condition:
+                if request in self._pending:
+                    self._pending.remove(request)
+            return False
+        with self._condition:
             while request.decided is None:
                 remaining = deadline - self._clock()
                 if remaining <= 0:
                     self._pending.remove(request)
-                    notify(f"Approval {request.id} timed out; denied.")
-                    return False
+                    timed_out = True
+                    break
                 self._condition.wait(remaining)
-            self._pending.remove(request)
-            return request.decided
+            else:
+                timed_out = False
+                self._pending.remove(request)
+                decision = request.decided
+        if timed_out:
+            notify(f"Approval {request.id} timed out; denied.")
+            return False
+        return decision is True
 
     def resolve(self, approved: bool, *, index: int | None = None) -> bool:
         with self._condition:
@@ -83,6 +97,7 @@ class ApprovalServer:
             self.path.unlink()
         server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         server.bind(str(self.path))
+        os.chmod(self.path, 0o600)
         server.listen()
         server.settimeout(0.1)
         self._socket = server

@@ -1,4 +1,4 @@
-"""The P3 walking skeleton: allowlisted text in, echoed text out."""
+"""Production Slack daemon plus the retained experimental iMessage gateway."""
 import logging
 
 from iris.allowlist import Allowlist
@@ -125,6 +125,7 @@ def main():
         source.run(gateway.handle_envelope, on_connected=runtime.connected,
                    on_disconnected=runtime.disconnected)
     finally:
+        approval_server.close()
         runtime.close()
 
 

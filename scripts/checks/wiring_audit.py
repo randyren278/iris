@@ -30,13 +30,27 @@ import sys
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 IRIS_ROOT = REPO / "iris"
-UNWIRED_MD = REPO / ".review" / "unwired.md"
-
 DECLARED_ENTRY_POINTS = ("iris/main.py", "iris/irisctl.py", "iris/approval_hook.py")
 
 ENTRY_POINT_CLASSIFICATIONS = ("live-probe", "operator-cli")
 
-# --- Doc-claim heuristic (task 1/3 of Phase 2 in REVIEW-PLAN.md) ----------
+CLASSIFICATIONS = {
+    "iris/slack_probe.py": "live-probe",
+    "iris/hook_probe.py": "live-probe",
+    "iris/agent_probe.py": "live-probe",
+    "iris/weather_probe.py": "live-probe",
+    "iris/web_probe.py": "live-probe",
+    "iris/senses/calendar_probe.py": "live-probe",
+    "iris/salience.py": "planned-not-wired",
+    "iris/user_model.py": "planned-not-wired",
+    "iris/outcomes.py": "planned-not-wired",
+    "iris/capabilities.py": "planned-not-wired",
+    "iris/lanes.py": "planned-not-wired",
+    "iris/hera_memory.py": "planned-not-wired",
+    "iris/fallback.py": "planned-not-wired",
+}
+
+# --- Doc-claim heuristic -------------------------------------------------
 # This is deliberately not linguistically perfect, just directionally
 # correct: each `planned-not-wired` module is mapped to the handful of words
 # a doc would realistically use to describe its capability, the doc is split
@@ -128,32 +142,15 @@ def compute_closure(entry_points: list[pathlib.Path]) -> set[pathlib.Path]:
             resolved = _module_name_to_path(name)
             if resolved is not None and resolved not in closure:
                 queue.append(resolved)
-        # Importing any iris.* submodule always executes iris/__init__.py.
-        init_py = IRIS_ROOT / "__init__.py"
-        if init_py not in closure:
-            queue.append(init_py)
+                parent = resolved.parent
+                while parent != IRIS_ROOT.parent:
+                    init_py = parent / "__init__.py"
+                    if init_py.is_file() and init_py not in closure:
+                        queue.append(init_py)
+                    if parent == IRIS_ROOT:
+                        break
+                    parent = parent.parent
     return closure
-
-
-def parse_unwired(path: pathlib.Path) -> dict[str, str]:
-    """Return {module relative path: classification} from `.review/unwired.md`."""
-    classifications: dict[str, str] = {}
-    if not path.is_file():
-        return classifications
-    for line in path.read_text().splitlines():
-        line = line.strip()
-        if not line.startswith("|"):
-            continue
-        cells = [c.strip() for c in line.strip("|").split("|")]
-        if len(cells) < 2:
-            continue
-        module_path, classification = cells[0], cells[1]
-        if module_path.lower() in ("path", "") or set(module_path) <= {"-", ":"}:
-            continue
-        module_path = module_path.strip("`")
-        if classification and classification not in ("Classification",):
-            classifications[module_path] = classification.strip("`")
-    return classifications
 
 
 def all_iris_modules() -> list[pathlib.Path]:
@@ -166,7 +163,7 @@ def all_iris_modules() -> list[pathlib.Path]:
 
 
 def find_orphans() -> tuple[list[pathlib.Path], dict[str, str]]:
-    classifications = parse_unwired(UNWIRED_MD)
+    classifications = CLASSIFICATIONS
     entry_points = [REPO / p for p in DECLARED_ENTRY_POINTS]
     for rel, classification in classifications.items():
         if classification in ENTRY_POINT_CLASSIFICATIONS:
@@ -215,7 +212,7 @@ def _doc_blocks(text: str) -> list[str]:
 
 
 def _check_docs(paths: list[pathlib.Path]) -> int:
-    classifications = parse_unwired(UNWIRED_MD)
+    classifications = CLASSIFICATIONS
     planned = [module for module, c in classifications.items() if c == "planned-not-wired"]
     failures = []
     for doc_path in paths:

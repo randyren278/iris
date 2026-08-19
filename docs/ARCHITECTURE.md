@@ -81,18 +81,19 @@ Slack's Web API. Iris does not bind an HTTP port.
 
 ## General agent runtime decision
 
-Iris will use the installed Claude CLI's documented `--print`,
-`--output-format=stream-json`, `--mcp-config`, and `--strict-mcp-config`
-surface for the general-agent adapter.  MCP tools run as an Iris-owned local
+Iris uses the installed Claude CLI's documented `--print`,
+`--output-format=json`, `--mcp-config`, and `--strict-mcp-config`
+surface for the general-agent adapter. MCP tools run as an Iris-owned local
 server: the CLI can request a named tool, but it never receives a filesystem,
 network, or provider handle.  Iris validates each request and sends back one
 structured tool result or error.
 
-The adapter is isolated with `--setting-sources ""` and
-`--strict-mcp-config`; it does not inherit operator MCP configuration, hooks,
-or browser state.  The current Phase 1 harness exercises the protocol with
-fake agents only.  A separate operator-authorized live probe is required
-before asserting that the authenticated CLI can make MCP calls in production.
+The adapter is isolated with `--setting-sources ""`, `--strict-mcp-config`, an
+explicit MCP-only tool list, a scrubbed Claude environment, and no session
+persistence. It does not inherit operator MCP configuration, hooks, or browser
+state. Deterministic adapter tests cover the command boundary; the optional
+agent probe separately checks the authenticated CLI against a disposable MCP
+server.
 4. Every reply is posted to the original thread.
 
 ```mermaid
@@ -100,19 +101,19 @@ flowchart TD
     dm["Direct message arrives"] --> allow{"Sender in<br/>slack_allowlist?"}
     allow -- no --> drop["Audit a digest<br/>never the body"]
     allow -- yes --> parse{"parse() recognizes<br/>a command?"}
-    parse -- no --> talk["Conversational turn<br/>Sonnet, no tools"]
+    parse -- no --> talk["Agent turn<br/>Sonnet + read-only MCP tools"]
     parse -- yes --> route["Command router"]
     talk --> reply["Reply in the origin thread"]
     route --> session["Coding session<br/>or state change"]
     session --> reply
 ```
 
-The conversation backend invokes Claude in text-only mode. Its system prompt
-states that it has no tools and must not represent prose as a completed action.
-The same prompt also governs Iris's conversational voice (tone-mirroring,
-restrained humor), and it bars humor or teasing of any kind from any
-safety-sensitive reply. The command router is the only path that can start a
-coding session.
+The conversation backend invokes Claude with only Iris's fixed read-only MCP
+catalog. Its prompt encourages relevant reads while explicitly denying write,
+shell, outbound-message, account, and other consequential authority. Tool
+results remain labeled untrusted data. The same prompt governs Iris's voice
+(tone-mirroring and restrained humor) and bars humor from safety-sensitive
+replies. The command router is the only path that can start a coding session.
 
 ## Models and isolation
 
@@ -121,7 +122,7 @@ Iris holds no API key. It shells out to the locally authenticated `claude` and
 
 | Path | Model | Why |
 | --- | --- | --- |
-| Conversational turn | `--model sonnet` | short, tool-less, and frequent |
+| Conversational turn | `--model sonnet` | short, bounded, and read-only |
 | Claude coding session | `--model opus` | does the actual work |
 | Codex session | unpinned | inherits `~/.codex/config.toml`, so the choice lives in one place |
 
@@ -193,7 +194,7 @@ treat a Codex session as sandbox-bounded rather than approval-gated.
 | Runtime state, sessions, audit, memory | `~/.iris/` | directory is created mode `0700`; atomic state files use mode `0600` where implemented |
 | Approved memory claims | `~/.iris/memory.json` | only explicitly confirmed `self` or `team` claims are retrievable |
 | Corrected / forgotten claims | same memory ledger | correction adds a superseding record; forgetting replaces the record with a tombstone |
-| Calendar source metadata | operator-selected local store | `SenseStore` quarantines items as `untrusted` with source revocation, but this store is not yet wired into the daemon — only the read-only probe runs today |
+| Sense source metadata | `~/.iris/senses.json` when present | the agent can read quarantined `untrusted` records; provider ingestion remains opt-in and is not scheduled by the daemon |
 | Audit records | `~/.iris/audit.jsonl` | append-only rotation; rejected inbound text is represented only by SHA-256 digest |
 
 Trusted context injected into a conversation may only be `self` or `team`
@@ -209,8 +210,9 @@ only promises enabled behavior:
   semantics.
 - The user-model and salience modules are currently bounded scaffolding. The
   salience engine defaults to shadow mode and sends no unsolicited messages.
-- Calendar is the only live sense currently wired for a macOS read-only probe.
-  Tasks, documents, and email remain planned integrations.
+- Calendar has a macOS read-only access probe, and an existing quarantined
+  sense store is exposed to the agent read-only. Provider synchronization,
+  tasks, documents, and email remain planned integrations.
 - Capability policy is deny-by-default. A new skill can be drafted but is not
   automatically made loadable.
 

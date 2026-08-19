@@ -70,9 +70,9 @@ Nothing crosses from prose to action without that gate. See
   supersede prior claims; forgetting hides a claim from retrieval while keeping
   an audit-preserving tombstone.
 - **Read narrowly.** The first live sense is macOS Calendar, verified today by
-  a read-only probe. The `SenseStore` quarantine/revoke pipeline that keeps
-  source items untrusted and revocable is implemented but not yet wired into
-  the daemon.
+  a read-only probe. The agent may read an existing quarantined `SenseStore`;
+  Calendar ingestion itself remains an operator-run, opt-in step rather than a
+  daemon schedule.
 - **Evaluate proactive help.** A shadow-mode salience engine that scores
   explainable candidate reminders without sending them exists but is not yet
   wired into the daemon.
@@ -200,15 +200,15 @@ Iris launchd daemon ──► allowlisted + DM-only router
       │                         │
       │ plain language          │ explicit command
       ▼                         ▼
-Text-only Claude turn      Claude Code / Codex session
-no tools                   tool call → Slack y/n approval
+Claude agent turn          Claude Code / Codex session
+fixed read-only MCP tools  tool call → Slack y/n approval
       │                         │
       └────────── reply in original Slack thread ──────────┘
 ```
 
-Iris never treats an unrecognized DM as a command. The conversational path is
-separate from the orchestration path; the former returns prose, while the
-latter is parsed into a restricted command grammar. See
+Iris never treats an unrecognized DM as a command. The conversational path may
+use only the registered read-only MCP catalog; the orchestration path is parsed
+through a restricted command grammar. See
 [Architecture](docs/ARCHITECTURE.md) for the trust, memory, and runtime model.
 
 ## Operations and development

@@ -5,12 +5,13 @@ import json
 import subprocess
 import sys
 
+from iris import agent_probe_server
 from iris.conversation import CLAUDE_ISOLATION, CONVERSATION_MODEL
 
 
 def command() -> list[str]:
     config = {"mcpServers": {"iris-probe": {
-        "command": sys.executable, "args": ["-m", "iris.agent_probe_server"],
+        "command": sys.executable, "args": ["-m", agent_probe_server.__name__],
     }}}
     prompt = ("Use iris-probe's iris_probe_read tool once, then attempt iris_probe_write once. "
               "Report only whether each tool was available; do not perform any other action.")

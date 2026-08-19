@@ -1,7 +1,7 @@
 """Slack Socket Mode transport for the Iris gateway.
 
-This module owns only transport concerns.  It deliberately echoes accepted
-DMs in S1; command parsing and agent work are added in later slices.
+This module owns only transport concerns. Command and agent behavior arrive
+through the injected handler.
 """
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ import time
 from collections.abc import Callable, Iterable
 
 from iris.slack_config import SlackCredentials
+from iris.output import split_for_slack
 
 
 LOG = logging.getLogger(__name__)
@@ -66,13 +67,14 @@ class SlackGateway:
     """Allowlist and echo inbound Slack DMs with retry de-duplication."""
 
     def __init__(self, allowed_user_ids: Iterable[str], client, *, handler=None, audit=None,
-                 on_inbound=None, on_outbound=None):
+                 on_inbound=None, on_outbound=None, splitter=split_for_slack):
         self.allowed_user_ids = frozenset(allowed_user_ids)
         self.client = client
         self.handler = handler
         self.audit = audit
         self.on_inbound = on_inbound
         self.on_outbound = on_outbound
+        self._splitter = splitter
         self._seen_event_ids: set[str] = set()
         self._dedupe_lock = threading.Lock()
 
@@ -103,14 +105,17 @@ class SlackGateway:
                               channel_id=message.channel_id, thread_ts=message.reply_thread_ts)
         if self.on_inbound:
             self.on_inbound()
-        response = self.handler(message) if self.handler else message.text
-        self.client.post_message(
-            channel_id=message.channel_id,
-            text=response,
-            thread_ts=message.reply_thread_ts,
-        )
-        if self.on_outbound:
-            self.on_outbound()
+        try:
+            response = self.handler(message) if self.handler else message.text
+            chunks = (response,) if len(response) <= 3000 else self._splitter(response)
+        except Exception:
+            LOG.exception("Slack message handler failed", extra={"event_id": message.event_id})
+            chunks = ("I couldn't complete that request. Please try again.",)
+        for chunk in chunks:
+            self.client.post_message(channel_id=message.channel_id, text=chunk,
+                                     thread_ts=message.reply_thread_ts)
+            if self.on_outbound:
+                self.on_outbound()
         return True
 
     def run_forever(self, source, *, stop: Callable[[], bool] | None = None) -> None:
