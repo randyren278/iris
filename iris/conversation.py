@@ -7,6 +7,8 @@ import os
 import subprocess
 from collections import defaultdict, deque
 
+from iris.capability_runtime import CapabilityError
+
 
 @dataclasses.dataclass(frozen=True)
 class MemoryContext:
@@ -64,9 +66,12 @@ class ClaudeTextBackend:
 class ConversationCoordinator:
     """Per-thread short-term context; it returns prose and never dispatches actions."""
 
-    def __init__(self, backend, *, context_provider=None, max_messages=8):
+    def __init__(self, backend, *, context_provider=None, capability_broker=None, capability_selector=None,
+                 max_messages=8):
         self.backend = backend
         self.context_provider = context_provider or (lambda _key: ())
+        self.capability_broker = capability_broker
+        self.capability_selector = capability_selector
         self.max_messages = max_messages
         self._turns: dict[tuple[str, str], deque[ConversationMessage]] = defaultdict(deque)
 
@@ -79,7 +84,15 @@ class ConversationCoordinator:
         except TypeError:  # compatibility for existing one-argument providers
             supplied = self.context_provider(key)
         context = tuple(item for item in supplied if item.trust in {"self", "team"})
-        reply = self.backend.reply(tuple(turns), context)
+        request = self.capability_selector(message.text) if self.capability_selector else None
+        if request is not None and self.capability_broker is not None:
+            try:
+                result = self.capability_broker.invoke(request)
+                reply = f"{result.text}\n_{result.source}; observed {result.observed_at}_"
+            except CapabilityError as error:
+                reply = str(error)
+        else:
+            reply = self.backend.reply(tuple(turns), context)
         turns.append(ConversationMessage("assistant", reply))
         while len(turns) > self.max_messages:
             turns.popleft()

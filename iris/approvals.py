@@ -25,18 +25,19 @@ class ApprovalQueue:
         self._pending: list[PendingApproval] = []
         self._next_id = 1
 
-    def request(self, summary: str, *, timeout: float) -> bool:
+    def request(self, summary: str, *, timeout: float, notifier: Callable[[str], None] | None = None) -> bool:
         with self._condition:
+            notify = notifier or self._notifier
             request = PendingApproval(self._next_id, summary)
             self._next_id += 1
             self._pending.append(request)
-            self._notifier(self.render(request))
+            notify(self.render(request))
             deadline = self._clock() + timeout
             while request.decided is None:
                 remaining = deadline - self._clock()
                 if remaining <= 0:
                     self._pending.remove(request)
-                    self._notifier(f"Approval {request.id} timed out; denied.")
+                    notify(f"Approval {request.id} timed out; denied.")
                     return False
                 self._condition.wait(remaining)
             self._pending.remove(request)

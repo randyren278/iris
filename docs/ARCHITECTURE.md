@@ -78,6 +78,21 @@ Slack's Web API. Iris does not bind an HTTP port.
    Slack user IDs. Rejected messages are audited by digest, never body text.
 3. Recognized commands enter the deterministic command router. Unrecognized
    text is a conversational turn instead.
+
+## General agent runtime decision
+
+Iris will use the installed Claude CLI's documented `--print`,
+`--output-format=stream-json`, `--mcp-config`, and `--strict-mcp-config`
+surface for the general-agent adapter.  MCP tools run as an Iris-owned local
+server: the CLI can request a named tool, but it never receives a filesystem,
+network, or provider handle.  Iris validates each request and sends back one
+structured tool result or error.
+
+The adapter is isolated with `--setting-sources ""` and
+`--strict-mcp-config`; it does not inherit operator MCP configuration, hooks,
+or browser state.  The current Phase 1 harness exercises the protocol with
+fake agents only.  A separate operator-authorized live probe is required
+before asserting that the authenticated CLI can make MCP calls in production.
 4. Every reply is posted to the original thread.
 
 ```mermaid
@@ -201,3 +216,20 @@ only promises enabled behavior:
 
 The test suite and live acceptance checks are the source of truth for future
 scope and human acceptance gates.
+
+## Weather provider decision
+
+The first conversational capability is current weather, served by Open-Meteo's
+public forecast and geocoding APIs. Iris uses only ordinary HTTPS GET requests,
+needs no provider credential for this non-commercial local deployment, and
+must attribute each result to Open-Meteo with its observation time. The adapter
+has a fixed timeout and validates every response before a result reaches a
+Slack reply. Open-Meteo's free public tier is rate-limited and provides no
+uptime guarantee; a future commercial deployment needs its separately managed
+customer API key and an explicit operator decision.
+
+The provider response is external, untrusted data. Iris's capability broker
+reduces it to a fixed result shape; provider text can never become instructions
+or trigger a local action. Only capabilities registered as `read_only` may run
+from ordinary conversation. Proposal-only and consequential capabilities stay
+behind explicit Iris commands and the existing approval controls.

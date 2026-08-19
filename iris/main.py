@@ -3,9 +3,15 @@ import logging
 
 from iris.allowlist import Allowlist
 from iris.config import load
+from iris.grammar import parse
 from iris.poller import Poller
 
 LOG = logging.getLogger(__name__)
+
+
+def route_message(message, router, conversation):
+    """Keep explicit commands ahead of every conversational capability."""
+    return router.handle(message) if parse(message.text) is not None else conversation.reply(message)
 
 
 class Gateway:
@@ -51,9 +57,10 @@ def main():
     from iris.sessions import SessionController
     from iris.doctor import ensure_private_state_dir
     from iris.runtime import RuntimeSupervisor
-    from iris.conversation import ClaudeTextBackend, ConversationCoordinator, MemoryContext
+    from iris.conversation import ClaudeTextBackend, MemoryContext
+    from iris.agent_conversation import GeneralAgentCoordinator, TextOnlyAgentAdapter
+    from iris.agent_runtime import AgentRuntime
     from iris.memory import MemoryStore
-    from iris.grammar import parse
     from iris.session_transport import SessionTransport
     from iris.output import split_for_slack
     from iris.notifications import OriginThreadNotifier
@@ -94,11 +101,16 @@ def main():
         return tuple(MemoryContext(item.claim, item.trust, item.source_ref)
                      for item in memory.retrieve(query))
 
-    conversation = ConversationCoordinator(ClaudeTextBackend(), context_provider=memory_context)
+    text_backend = ClaudeTextBackend()
+    conversation = GeneralAgentCoordinator(
+        AgentRuntime({}),
+        lambda _message, turns, context: TextOnlyAgentAdapter(text_backend, turns, context),
+        context_provider=memory_context,
+    )
 
     def handle(message):
         approval_notifier.observe(message)
-        return router.handle(message) if parse(message.text) is not None else conversation.reply(message)
+        return route_message(message, router, conversation)
 
     gateway = SlackGateway(
         config.slack_allowlist,

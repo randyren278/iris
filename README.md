@@ -43,7 +43,7 @@ be useful because it pays attention, not because it silently takes control.
 ```mermaid
 flowchart LR
     you["You<br/>private Slack DM"] -- "outbound Socket Mode" --> iris["Iris daemon<br/>on your Mac"]
-    iris -- "plain language" --> talk["Conversation<br/>Sonnet, no tools"]
+    iris -- "plain language" --> talk["General agent runtime<br/>bounded read-only tools"]
     iris -- "explicit command" --> code["Coding session<br/>Claude Code or Codex"]
     code -- "every tool call" --> gate{"Approve<br/>in Slack?"}
     gate -- "y" --> run["Tool runs"]
@@ -58,9 +58,12 @@ Nothing crosses from prose to action without that gate. See
 
 ## What it does
 
-- **Converse.** A plain DM is sent to a text-only Claude turn with short-term
-  thread context. That turn has no tool access and cannot claim an action was
-  performed.
+- **Converse and research.** A plain DM reaches the general-agent runtime with
+  short-term trusted thread context. Its fixed catalog may perform bounded,
+  attributed read-only research; it cannot turn source content into authority.
+- **Answer live weather.** Ask `what's the weather in <city>?` for a bounded,
+  read-only answer attributed to Open-Meteo. Iris never sends weather-provider
+  content into a privileged agent context or treats it as an instruction.
 - **Orchestrate coding work.** Select a project, start Claude Code or Codex,
   see progress in the originating Slack thread, and steer a running session.
 - **Remember carefully.** Durable claims have a provenance record. Corrections
@@ -180,6 +183,10 @@ coding session.
 | `forget <id>` | Hide a claim from future retrieval. |
 | `y` / `n` | Approve or deny the oldest pending tool-call approval. |
 
+For a current weather question, include a city: `what's the weather in
+Manila?` Iris returns read-only current conditions with an Open-Meteo source
+and observation time. It asks for a city rather than guessing your location.
+
 `stop` is deliberately terminal-rearm only. This prevents a Slack message from
 re-enabling control after an emergency stop.
 
@@ -214,6 +221,13 @@ latter is parsed into a restricted command grammar. See
 
 # Entire deterministic test suite (no live Slack account required)
 .venv/bin/python -m pytest -q
+
+# Optional live, credential-free weather-provider reachability probe
+.venv/bin/python -m iris.weather_probe
+
+# Operator-authorized live compatibility probes (no Slack workspace required)
+.venv/bin/python -m iris.agent_probe
+.venv/bin/python -m iris.web_probe
 
 # Remove only Iris's launchd agent
 ./scripts/uninstall.sh

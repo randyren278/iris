@@ -1,5 +1,34 @@
 # Operating Iris
 
+## General agent runtime probe
+
+The agent runtime probe is intentionally deferred until its explicit operator
+gate. It uses the local authenticated Claude CLI with Iris's isolated MCP
+configuration and a disposable fake tool server; it does not read Slack
+credentials or contact a Slack workspace. Do not treat deterministic fake
+tests as evidence that the agent runtime probe has passed against the installed
+CLI.
+
+Run the opt-in probes only when you want live evidence:
+
+```sh
+.venv/bin/python -m iris.agent_probe
+.venv/bin/python -m iris.web_probe
+```
+
+The agent probe launches a disposable local MCP server with one fixed read and
+one always-denied fake mutation. The web probe fetches `https://example.com/`
+through the bounded HTTPS fetcher. Neither uses Slack credentials or requires a
+Slack workspace.
+
+## Weather probe
+
+After the weather capability is installed, run `.venv/bin/python -m
+iris.weather_probe` to make one bounded, read-only weather probe. It prints
+only provider health metadata and never reads or displays a credential. The
+probe is optional and is not evidence that Slack Socket Mode itself is online;
+use `irisctl verify-online` for that separate check.
+
 ## Health checks
 
 Run these from the repository root:
