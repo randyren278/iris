@@ -3,12 +3,16 @@
 
 Computes the transitive `iris.*` import closure starting from the declared
 production entry points (`iris/main.py`, `iris/irisctl.py`,
-`iris/approval_hook.py`) plus any module `.review/unwired.md` classifies as
-`live-probe` or `operator-cli` (those are run by hand, e.g.
+`iris/approval_hook.py`) plus any module the CLASSIFICATIONS table below
+marks as `live-probe` or `operator-cli` (those are run by hand, e.g.
 `python -m iris.slack_probe`, so they are entry points in their own right).
-Every `.py` file under `iris/` must be either in that closure or have a row
-in `.review/unwired.md` — otherwise it is a module nothing reaches and
+Every `.py` file under `iris/` must be either in that closure or have an
+entry in CLASSIFICATIONS — otherwise it is a module nothing reaches and
 nothing has explained, which is a hard failure.
+
+Note that import-reachability is necessary but not sufficient: a module can
+sit in the closure purely because an entry point imports a name it never
+constructs. Reaching for this check alone will not catch that.
 
 Usage:
     wiring_audit.py                       # exit 0 if every module is wired
@@ -258,7 +262,7 @@ def main(argv=None) -> int:
         return 0
 
     if orphans:
-        print("Unwired iris/ modules with no classification in .review/unwired.md:",
+        print("Unwired iris/ modules with no entry in wiring_audit CLASSIFICATIONS:",
               file=sys.stderr)
         for module in orphans:
             print(f"  {module.relative_to(REPO).as_posix()}", file=sys.stderr)

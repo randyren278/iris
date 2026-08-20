@@ -7,9 +7,6 @@ import pytest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
-from tests.fakedb import FakeChatDB  # noqa: E402
-from tests.fakesend import FakeSender  # noqa: E402
-
 
 @pytest.fixture
 def socket_dir():
@@ -25,13 +22,3 @@ def socket_dir():
         yield path
     finally:
         shutil.rmtree(path, ignore_errors=True)
-
-
-@pytest.fixture
-def fakedb(tmp_path):
-    return FakeChatDB(tmp_path / "chat.db")
-
-
-@pytest.fixture
-def sender():
-    return FakeSender()

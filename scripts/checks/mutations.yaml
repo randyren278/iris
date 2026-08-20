@@ -3,21 +3,6 @@
 # uniquely-matching source substring. The guard applies find->replace, runs
 # pytest, requires red, then restores the file.
 mutations:
-- id: "allowlist-open"
-  file: "iris/allowlist.py"
-  invariant: "Accept only allowlisted Slack identities."
-  find: "        if not isinstance(handle, str):\n            return False\n        return handle in self._handles"
-  replace: "        return True"
-- id: "allowlist-substring"
-  file: "iris/allowlist.py"
-  invariant: "Allowlist matching is exact, never substring/prefix."
-  find: "        return handle in self._handles"
-  replace: "        return any(handle in item or item in handle for item in self._handles)"
-- id: "gateway-skips-allowlist"
-  file: "iris/main.py"
-  invariant: "The retained local gateway still applies its allowlist before sending."
-  find: "        if not message.is_self_chat and not self.allowlist.allows(message.handle):\n            # Do not include a stranger's body in this early operational log.\n            LOG.warning(\"ignored message from non-allowlisted handle\")\n            return False\n        sent = self.config.sender(message.chat_guid, message.body)"
-  replace: "        sent = self.config.sender(message.chat_guid, message.body)"
 - id: "hook-fails-open"
   file: "iris/approval_hook.py"
   invariant: "Claude tool calls deny on every hook failure path."
@@ -83,11 +68,6 @@ mutations:
   invariant: "Only operator-confirmed self/team claims become trusted memory."
   find: "        if trust not in {\"self\", \"team\"} or authoring_mode != \"operator_confirmed\":"
   replace: "        if False and (trust not in {\"self\", \"team\"} or authoring_mode != \"operator_confirmed\"):"
-- id: "poller-replays-history"
-  file: "iris/poller.py"
-  invariant: "A restart resumes at high-water rather than replaying historical messages."
-  find: "                self._save_high_water(self._current_max_rowid(conn))\n                return []"
-  replace: "                self._save_high_water(0)\n                return []"
 - id: "agent-action-approval-inverted"
   file: "iris/agent_actions.py"
   invariant: "General-agent coding actions launch only after a positive exact operator approval."
@@ -98,3 +78,18 @@ mutations:
   invariant: "Emergency stop remains disarmed across daemon/controller restart until terminal re-arm."
   find: "        self.disarmed = bool(self._disarm_path and self._disarm_path.exists())"
   replace: "        self.disarmed = False"
+- id: slack-allowlist-open
+  file: iris/slack.py
+  invariant: Accept only allowlisted Slack user IDs in direct messages.
+  find: '        if message.user_id not in self.allowed_user_ids:'
+  replace: '        if False:'
+- id: slack-allowlist-substring
+  file: iris/slack.py
+  invariant: Slack allowlist matching is exact, never substring/prefix.
+  find: '        if message.user_id not in self.allowed_user_ids:'
+  replace: '        if not any(message.user_id in item or item in message.user_id for item in self.allowed_user_ids):'
+- id: slack-accepts-non-dm
+  file: iris/slack.py
+  invariant: Only direct messages drive Iris; channel and bot events are ignored.
+  find: '        if message.channel_type != "im" or message.bot_id or message.subtype:'
+  replace: '        if message.bot_id or message.subtype:'

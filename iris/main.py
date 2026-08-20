@@ -1,45 +1,13 @@
-"""Production Slack daemon plus the retained experimental iMessage gateway."""
+"""Production Slack daemon."""
 import logging
 
-from iris.allowlist import Allowlist
 from iris.config import load
 from iris.grammar import parse
-from iris.poller import Poller
-
-LOG = logging.getLogger(__name__)
 
 
 def route_message(message, router, conversation):
     """Keep explicit commands ahead of every conversational capability."""
     return router.handle(message) if parse(message.text) is not None else conversation.reply(message)
-
-
-class Gateway:
-    """Route inbound messages through the allowlist and reply to allowed ones."""
-    def __init__(self, config, *, poller=None):
-        self.config = config
-        self.allowlist = Allowlist.from_config(config)
-        self.poller = poller or Poller(
-            config.chatdb, config.state_path,
-            self_chat_guid=config.self_chat_guid,
-            self_command_suffix=config.self_command_suffix,
-        )
-
-    def handle(self, message):
-        if not message.is_self_chat and not self.allowlist.allows(message.handle):
-            # Do not include a stranger's body in this early operational log.
-            LOG.warning("ignored message from non-allowlisted handle")
-            return False
-        sent = self.config.sender(message.chat_guid, message.body)
-        if sent:
-            self.poller.track_echo(message.chat_guid, message.body)
-        return sent
-
-    def run_once(self):
-        return [self.handle(message) for message in self.poller.poll_once()]
-
-    def run_forever(self, stop=None):
-        self.poller.run(self.handle, stop=stop)
 
 
 def main():
