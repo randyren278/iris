@@ -1,107 +1,237 @@
 # Operating Iris
 
-## General agent runtime probe
+## Verification philosophy
 
-The agent runtime probe uses the local authenticated Claude CLI with Iris's
-isolated MCP configuration and a disposable fake tool server; it does not read
-Slack credentials or contact a Slack workspace. Deterministic tests are not a
-substitute for this optional installed-CLI compatibility check.
+Iris separates deterministic evidence from live dependency evidence. `pytest`
+must prove schemas, routing, concurrency, denial behavior, state persistence, and
+fake-backed integrations without requiring Slack or a model account. Separate
+operator probes then verify the installed Slack, Claude/Codex, EventKit, and
+public-provider surfaces that a fake cannot certify.
 
-Run the opt-in probes only when you want live evidence:
-
-```sh
-.venv/bin/python -m iris.agent_probe
-.venv/bin/python -m iris.web_probe
-```
-
-The agent probe launches a disposable local MCP server with one fixed read and
-one always-denied fake mutation. The web probe fetches `https://example.com/`
-through the bounded HTTPS fetcher. Neither uses Slack credentials or requires a
-Slack workspace.
-
-## Weather probe
-
-After the weather capability is installed, run `.venv/bin/python -m
-iris.weather_probe` to make one bounded, read-only weather probe. It prints
-only provider health metadata and never reads or displays a credential. The
-probe is optional and is not evidence that Slack Socket Mode itself is online;
-use `irisctl verify-online` for that separate check.
+Do not call a capability live merely because its module exists. The expected
+chain is: **production wiring → deterministic test → acceptance test → live
+probe when an external dependency is involved**.
 
 ## Health checks
 
-Run these from the repository root:
+Run from the repository root:
 
 ```sh
 .venv/bin/python -m iris.irisctl status
 .venv/bin/python -m iris.irisctl verify-online
 ```
 
-`status` prints the latest local runtime record. `verify-online` succeeds only
-when the daemon has reported a recent Socket Mode connection. A process that
-exists but has not connected is not considered healthy.
-
-To restart the launchd job:
+`verify-online` succeeds only for a recent Socket Mode heartbeat from a live
+process. To restart the launchd job:
 
 ```sh
 .venv/bin/python -m iris.irisctl restart
 ```
 
+### Emergency stop and re-arm
+
+Slack `stop` terminates registered coding sessions and writes
+`~/.iris/disarmed`. The marker survives daemon crashes and restarts, so launch
+requests remain blocked until the operator explicitly re-arms from Terminal:
+
+```sh
+.venv/bin/python -m iris.irisctl rearm
+```
+
+Do not delete the marker from Slack-facing code. Terminal-only re-arm is part of
+the authority boundary.
+
+## General agent runtime probes
+
+The general-agent probe uses the locally authenticated Claude CLI with Iris's
+isolated MCP configuration. It does not read Slack credentials or contact a
+Slack workspace.
+
+```sh
+.venv/bin/python -m iris.agent_probe
+```
+
+It performs two checks:
+
+1. a disposable MCP server exposes one fixed read and one fake mutation; Claude
+   must invoke both, with the mutation denied;
+2. a disposable project plus real `AgentActionServer` proves Claude can invoke
+   `start_coding` through MCP, cross the local action socket, receive approval,
+   and reach exactly one fake session launch with unchanged validated
+   arguments. No real project or coding process is modified in this second
+   check.
+
+This probe is the live compatibility gate for the current plain-English
+agent→approval-bound-coding path. Re-run it after upgrading Claude or changing
+`agent_conversation.py`, `mcp_server.py`, or `agent_actions.py`.
+
+## Claude tool-approval probes
+
+The approval hook must remain active even though Iris disables operator settings
+files with `--setting-sources ""`.
+
+```sh
+.venv/bin/python -m iris.hook_probe
+bash scripts/checks/live_approval.sh
+bash scripts/checks/live_deny_paths.sh
+```
+
+`hook_probe` forces one real Claude tool request and verifies the Iris
+PreToolUse hook fires under subprocess isolation. `live_approval.sh` proves a
+real Claude tool call is denied without a responder and allowed after approval
+against a real `ApprovalServer`. `live_deny_paths.sh` exercises fail-closed
+socket/protocol/timeout cases.
+
+Production approval requests carry the exact Slack channel/thread in the child
+environment and include bounded JSON tool arguments in the human-visible
+summary. Bare `y`/`n` resolves the oldest request; `y <id>` / `n <id>` resolves
+one exact concurrent request.
+
+## Web and weather probes
+
+```sh
+.venv/bin/python -m iris.web_probe
+.venv/bin/python -m iris.weather_probe
+```
+
+These make bounded public reads without Slack credentials. They prove provider
+reachability, not Slack delivery.
+
+## Calendar
+
+First verify EventKit read permission:
+
+```sh
+.venv/bin/python -m iris.senses.calendar_probe
+```
+
+To also refresh upcoming events into Iris's quarantined sense store:
+
+```sh
+.venv/bin/python -m iris.senses.calendar_probe --sync
+.venv/bin/python -m iris.senses.calendar_probe --sync --days 30
+```
+
+The sync stores only event identifier, start time, and title in
+`~/.iris/senses.json`. Every row remains `untrusted`; ingestion does not promote
+Calendar content into trusted memory or authority. Sync is operator-run and
+there is no Calendar write capability.
+
+## Slack connectivity
+
+```sh
+.venv/bin/python -m iris.slack_probe
+```
+
+This verifies Keychain credentials and outbound Socket Mode connectivity. It is
+the live gate for the transport, not for model/tool behavior.
+
+## Deterministic test and structural gates
+
+Run all of these before treating a branch as releasable:
+
+```sh
+.venv/bin/python -m pytest -q
+.venv/bin/python scripts/checks/wiring_audit.py
+.venv/bin/python scripts/checks/wiring_audit.py \
+  --check-docs README.md docs/ARCHITECTURE.md docs/OPERATIONS.md
+.venv/bin/python scripts/checks/mermaid_lint.py --min 4 docs/ARCHITECTURE.md
+.venv/bin/python scripts/checks/link_check.py
+```
+
+The acceptance suite includes a deterministic Slack workflow that drives plain
+English into `AgentActionServer`, proves no session exists while approval is
+pending, routes `y <id>` through the real Slack/router path, and then verifies
+one exact coding-session launch in the originating thread.
+
+`test_master_agency.py` is intentionally a meta-gate over the production agent
+action server, MCP exposure, Claude adapter, Slack acceptance path, approval
+transport, launch configuration, and no-self-escalation tests. Its name should
+never be widened without widening what it executes.
+
+The wiring audit rejects unexplained modules that are unreachable from
+production or a classified operator/live entry point. Its doc check requires
+future-facing scaffolding such as salience, user model, outcome ledger, session
+lanes, Hera memory export, and fallback translation to remain explicitly marked
+as not wired.
+
+## Mutation guard
+
+The repository also contains a mutation manifest that deliberately damages
+important safety invariants and asserts the suite catches the damage:
+
+```sh
+.venv/bin/python scripts/checks/mutation_guard.py \
+  --manifest scripts/checks/mutations.yaml --assert-min 14
+```
+
+Run it after broad changes to approval, launch, grammar, memory, Slack, or
+conversation boundaries. If a mutation target becomes stale after a legitimate
+refactor, update the manifest rather than silently dropping the invariant.
+
+## Codex compatibility
+
+Iris launches Codex through `codex exec --sandbox workspace-write`. The command
+line sandbox overrides a wider operator configuration. Current Iris does **not**
+route individual Codex tool calls through Slack approval, and the Claude
+streaming transport does not make a running Codex exec session steerable via
+`@<id>`.
+
+After a Codex CLI upgrade, run the repository's Codex smoke launch on the
+operator Mac before relying on it. Treat resume/steering as unsupported until a
+specific installed-version live test is added; do not infer parity from Claude's
+transport.
+
 ## Menu bar indicator
 
-`scripts/install.sh` also installs `scripts/menubar/iris.30s.sh`, a
-[SwiftBar](https://swiftbar.app) plugin that reports daemon health in the menu
-bar. SwiftBar re-runs it every 30 seconds against a daemon heartbeat of 20
-seconds. Enable SwiftBar's own **Launch at Login** once so the indicator returns
-after a reboot.
+`scripts/install.sh` installs the optional SwiftBar plugin
+`scripts/menubar/iris.30s.sh`. It reads only `~/.iris/runtime.json` and reports
+health. SwiftBar refreshes every 30 seconds; the daemon heartbeat is 20 seconds.
 
 | Indicator | Meaning |
 | --- | --- |
-| Green | Connected. Equivalent to `verify-online` exiting 0. |
-| Orange | Starting, heartbeat stale for more than 90 seconds, or `runtime.json` unreadable. |
-| Red | Recorded as offline, or the recorded process is gone. |
-| Gray | No runtime record; the daemon has never started. |
+| Green | Connected and equivalent to `irisctl verify-online` success. |
+| Orange | Starting, stale heartbeat, or unreadable runtime record. |
+| Red | Recorded offline or recorded process is gone. |
+| Gray | No runtime record exists. |
 
-The dropdown reports state, heartbeat age, time since the last inbound and
-outbound Slack message, the last error type, and the PID. `Restart Iris` runs
-the same `launchctl kickstart -k` as `irisctl restart`.
-
-The plugin reads only `~/.iris/runtime.json`, which carries daemon health and
-no message content. It deliberately does not surface pending approvals, which
-stay in the originating Slack thread, and it cannot stop or re-arm the gateway.
-
-`./scripts/uninstall.sh` removes it. SwiftBar itself and any other plugins are
-left alone.
-
-## First-line troubleshooting
-
-| Symptom | Check | Safe response |
-| --- | --- | --- |
-| `Iris is not online` | `irisctl status`; inspect `~/.iris/launchd.err.log` | Restart with `irisctl restart`. Confirm the Mac has network access and is logged in. |
-| Credential probe fails | `.venv/bin/python -m iris.slack_probe` | Recheck the two Keychain entries described in [Slack setup](slack-setup.md). Do not paste tokens into a terminal or chat. |
-| Iris ignores a DM | Confirm it is a direct message from the Slack ID in `~/.iris/config.toml` | Correct the terminal-managed allowlist, then restart Iris. |
-| Coding command cannot start | Run `projects`, then `cd <project>` | Confirm the project is beneath `projects_root` and that the selected local CLI is installed. |
-| A tool call appears stuck | Reply `y` or `n` in the originating Slack thread | If no decision is received before its timeout, Iris denies it automatically. |
-| Calendar smoke test denies access | Run the probe from an interactive terminal | Grant Calendar access in macOS Privacy & Security if desired, or leave the integration disabled. |
+The indicator is read-only and does not approve, stop, or re-arm Iris.
 
 ## State locations
 
-Iris uses `~/.iris/` for private local state and `~/Library/LaunchAgents/` for
-its launchd definition. Nothing in this directory needs to be checked into the
-repository.
+Iris keeps private runtime state beneath `~/.iris/`; the directory is created
+mode `0700`.
 
 ```text
 ~/.iris/
-  config.toml          terminal-managed Slack user allowlist and project root
-  runtime.json         atomic current health record
-  sessions.json        local session registry
-  memory.json          provenance-aware trusted memory ledger
-  audit.jsonl          privacy-preserving audit log (rotated at its size bound)
+  config.toml          terminal-managed allowlist and projects_root
+  runtime.json         current daemon health record
+  sessions.json        coding-session registry
+  memory.json          provenance-aware trusted-memory ledger
+  senses.json          optional quarantined source snapshot
+  disarmed             persistent emergency-stop marker when present
+  audit.jsonl          privacy-preserving append-only audit log
+  approval.sock        local Claude tool-approval socket while daemon runs
+  agent-action.sock    local general-agent action socket while daemon runs
   launchd.out.log      daemon standard output
   launchd.err.log      daemon standard error
 ```
 
 Do not manually edit active JSON state while the daemon is running. Use Slack
-commands for memory corrections/forgetting and `irisctl` for runtime control.
+memory commands, the Calendar operator sync, and `irisctl` controls.
+
+## First-line troubleshooting
+
+| Symptom | Check | Safe response |
+| --- | --- | --- |
+| Iris is not online | `irisctl status`; inspect `~/.iris/launchd.err.log` | Restart and verify network/login state. |
+| Credential probe fails | `python -m iris.slack_probe` | Recheck Keychain entries; never paste tokens into chat. |
+| Iris ignores a DM | Confirm DM and stable Slack ID in config | Correct terminal-managed allowlist and restart. |
+| Coding action says gateway is disarmed | Check for `~/.iris/disarmed` | Re-arm only with `irisctl rearm` when intentional. |
+| Agent cannot start requested project | Run `projects` | Use a project beneath `projects_root`; ambiguous names are denied. |
+| Approval appears stuck | Inspect the approval ID in its originating thread | Reply `y <id>` or `n <id>`; timeout denies automatically. |
+| Calendar sync fails | Run probe without `--sync` interactively | Grant EventKit permission if desired, then retry sync. |
+| Agent probe fails after CLI upgrade | Re-run `hook_probe` and inspect installed CLI behavior | Keep the feature draft/not releasable until live compatibility is restored. |
 
 ## Upgrade and verify
 
@@ -109,62 +239,39 @@ commands for memory corrections/forgetting and `irisctl` for runtime control.
 git pull --ff-only
 .venv/bin/python -m pip install -e '.[dev]'
 .venv/bin/python -m pytest -q
+.venv/bin/python scripts/checks/wiring_audit.py
+.venv/bin/python -m iris.agent_probe
+.venv/bin/python -m iris.hook_probe
 .venv/bin/python -m iris.slack_probe
 .venv/bin/python -m iris.irisctl restart
+.venv/bin/python -m iris.irisctl verify-online
 ```
 
-`pytest` is designed to run without a live Slack account. Three separate live
-acceptance checks cover what a fake cannot:
-
-| Probe | Verifies |
-| --- | --- |
-| `.venv/bin/python -m iris.slack_probe` | Socket Mode credentials and connection |
-| `.venv/bin/python -m iris.hook_probe` | the approval hook still fires under subprocess isolation |
-| `.venv/bin/python -m iris.senses.calendar_probe` | optional read-only Calendar access |
-
-Run `hook_probe` after any change to how Iris launches Claude. It costs one
-small model call and is the only thing standing between an isolation flag
-regression and silently unmediated tool calls.
-
-## Safety-invariant checks
-
-These were built for the independent code review and are safe to re-run
-afterward; each proves a specific safety claim against real dependencies or
-real mutated source rather than a fake.
-
-| Command | Verifies | Re-run after |
-| --- | --- | --- |
-| `bash scripts/checks/live_gate.sh` | Keychain, Socket Mode, EventKit, and the approval hook, run in sequence against real dependencies; writes evidence to `.review/live-evidence.md` | Any change to credential loading, the Slack transport, or the approval hook |
-| `bash scripts/checks/live_approval.sh` | A real `claude` subprocess: a tool call is denied with no responder and allowed after `y`, against a real `ApprovalServer` | Any change to `iris/launcher.py`, `iris/approvals.py`, or `iris/approval_hook.py` |
-| `bash scripts/checks/live_deny_paths.sh` | The five fail-closed approval scenarios (daemon absent, unwritable socket, malformed JSON, empty summary, timeout) all deny against a real socket | Any change to the approval protocol or its error handling |
-| `.venv/bin/python scripts/checks/mutation_guard.py --manifest scripts/checks/mutations.yaml --assert-min 14` | Deliberately breaks each `CLAUDE.md` safety invariant in place and asserts the test suite catches it (then restores the source) | Any change to `iris/allowlist.py`, `iris/approvals.py`, `iris/approval_hook.py`, `iris/conversation.py`, `iris/launcher.py`, `iris/slack_config.py`, `iris/grammar.py`, `iris/memory.py`, `iris/main.py`, or `iris/poller.py` |
-
-Upgrading the `claude` or `codex` CLI is also a good reason to re-run all
-four: a CLI update can change flag parsing or default behavior in ways an
-offline fake cannot detect.
+For approval/launcher changes also run `live_approval.sh` and
+`live_deny_paths.sh`. For Calendar changes run the EventKit probe and an
+operator-authorized `--sync`. For Codex changes run its smoke launch on the same
+installed CLI version that production will use.
 
 ## Disable or remove
-
-To stop and remove the background launch agent and the menu bar indicator
-without touching Keychain items,
-Slack configuration, or `~/.iris/` state:
 
 ```sh
 ./scripts/uninstall.sh
 ```
 
-To prevent future Slack control immediately, remove your Slack user ID from
-`~/.iris/config.toml`, then restart or uninstall the daemon. If you need to
-rotate credentials, do so in Slack, update the matching Keychain items, and
-rerun the credential probe.
+This removes Iris's launch agent and menu indicator while leaving Keychain
+credentials and `~/.iris/` data in place. Removing the Slack user ID from
+`config.toml` and restarting is the immediate way to revoke Slack control.
 
 ## Security routine
 
-- Keep the Slack workspace private and add only deliberate Slack user IDs to
-  the allowlist.
-- Keep `~/.iris` private (`0700`) and do not commit its contents.
-- Treat every approval prompt as an action review: read the summary before
-  answering `y`.
-- Use `stop` when you want a hard pause; it cannot be undone from Slack.
-- Prefer read-only, revocable integrations. Add new provider permissions only
-  with a deterministic test and a distinct live acceptance check.
+- Keep the Slack workspace private and the allowlist minimal.
+- Keep `~/.iris` private and never commit it.
+- Read exact approval summaries before answering; use indexed approval when
+  more than one action is pending.
+- Use `stop` for a hard pause and `irisctl rearm` only after deciding to restore
+  consequential authority.
+- Prefer read-only, revocable integrations. Every new write/action domain gets a
+  narrow schema, daemon-owned validation, an explicit authority policy,
+  deterministic tests, and a separate live gate.
+- Re-run live probes after upgrading `claude`, `codex`, macOS/EventKit, or Slack
+  dependencies because offline fakes cannot certify changed external contracts.
