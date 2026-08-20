@@ -21,7 +21,12 @@ class CommandRouter:
         if isinstance(command, Simple):
             return self._simple(command, message.channel_id)
         if isinstance(command, TextCommand):
-            return self._text(command, message.channel_id, getattr(message, "reply_thread_ts", None))
+            return self._text(
+                command,
+                message.channel_id,
+                getattr(message, "reply_thread_ts", None),
+                getattr(message, "thread_ts", None),
+            )
         return self._indexed(command)
 
     def _simple(self, command, channel_id):
@@ -45,7 +50,15 @@ class CommandRouter:
             return "Approval recorded." if self.approvals.resolve(command.name == "y") else "No pending approval."
         raise AssertionError(f"unsupported simple command {command.name}")
 
-    def _text(self, command, channel_id, thread_ts):
+    def _text(self, command, channel_id, thread_ts, scope_thread_ts=None):
+        if command.name == "remember":
+            if self.memory is None:
+                return "Memory is not configured."
+            try:
+                record = self.memory.remember(command.text, source_ref=f"slack:{channel_id}:{thread_ts}")
+            except MemoryPolicyError as error:
+                return f"Memory update failed: {error}."
+            return f"Remembered memory {record.id}."
         if command.name == "forget":
             if self.memory is None:
                 return "Memory is not configured."
@@ -65,21 +78,37 @@ class CommandRouter:
             except MemoryPolicyError as error:
                 return f"Memory update failed: {error}."
             return f"Corrected memory {record_id} with {record.id}."
+
+        scope_key = (channel_id, scope_thread_ts)
+        default_key = (channel_id, None)
         if command.name == "cd":
             try:
                 project = self.catalog.select(command.text)
             except ProjectQueryError as error:
                 return f"Project selection failed: {error}."
-            self._active_projects[channel_id] = project.path
+            self._active_projects[scope_key] = project.path
             return f"Active project: {project.name}"
-        project = self._active_projects.get(channel_id)
+
+        project = self._active_projects.get(scope_key)
+        if project is None and scope_thread_ts is not None:
+            project = self._active_projects.get(default_key)
         if project is None:
             return "Select a project first with `cd <project>`."
-        session = self.sessions.launch(command.name, cwd=project, prompt=command.text)
-        self.sessions.bind_thread(session.id, channel_id, thread_ts)
+        session = self.sessions.launch(
+            command.name,
+            cwd=project,
+            prompt=command.text,
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+        )
         return f"Started {session.tool} session {session.id} in {session.cwd}."
 
     def _indexed(self, command):
+        if command.name == "approval":
+            approved = command.text == "y"
+            return (f"Approval {command.index} recorded."
+                    if self.approvals.resolve(approved, index=command.index)
+                    else f"No pending approval {command.index}.")
         if command.name == "kill":
             return f"Killed session {command.index}." if self.sessions.kill(command.index) else "No such session."
         if command.name == "session_message":
