@@ -53,7 +53,9 @@ def test_start_coding_action_waits_for_exact_origin_approval(tmp_path):
     assert sessions.calls == []
     assert notices and notices[0][:2] == ("D-1", "11.2")
     assert "repair the failing tests" in notices[0][2]
-    queue.resolve(True, index=1)
+    assert not queue.resolve(True, index=1, origin=("D-1", "different-thread"))
+    assert sessions.calls == []
+    assert queue.resolve(True, index=1, origin=("D-1", "11.2"))
     worker.join(1)
     server.close()
 
@@ -86,7 +88,7 @@ def test_denied_agent_action_never_launches_session(tmp_path):
     worker.start()
     while not queue.pending():
         time.sleep(0.005)
-    queue.resolve(False, index=1)
+    assert queue.resolve(False, index=1, origin=("D-1", "12.1"))
     worker.join(1)
     server.close()
 
