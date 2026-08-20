@@ -1,5 +1,4 @@
 import threading
-import time
 from types import SimpleNamespace
 
 from iris.agent_actions import AgentActionServer, request_action
@@ -9,6 +8,7 @@ from iris.projects import ProjectCatalog
 from iris.router import CommandRouter
 from iris.slack import SlackGateway
 from tests.slack_fakes import RecordingSlackClient
+from tests.waiting import wait_until
 
 
 class RecordingSessions:
@@ -61,7 +61,7 @@ def envelope(event_id, text, *, ts, thread_ts=None):
     return {"type": "events_api", "event_id": event_id, "event": event}
 
 
-def test_plain_english_can_cross_into_exactly_approved_coding_action(tmp_path):
+def test_plain_english_can_cross_into_exactly_approved_coding_action(tmp_path, socket_dir):
     project = tmp_path / "Iris"
     project.mkdir()
     client = RecordingSlackClient()
@@ -75,7 +75,7 @@ def test_plain_english_can_cross_into_exactly_approved_coding_action(tmp_path):
         return lambda text: client.post_message(channel_id=channel_id, thread_ts=thread_ts, text=text)
 
     action_server = AgentActionServer(
-        tmp_path / "agent-action.sock",
+        socket_dir / "agent-action.sock",
         approvals,
         projects,
         sessions,
@@ -95,8 +95,7 @@ def test_plain_english_can_cross_into_exactly_approved_coding_action(tmp_path):
         envelope("Ev-1", "please fix Iris", ts="10.2")
     ))
     first.start()
-    while not approvals.pending():
-        time.sleep(0.005)
+    wait_until(approvals.pending, message="approvals never received a pending approval")
 
     assert sessions.calls == []
     assert client.messages[0]["thread_ts"] == "10.2"

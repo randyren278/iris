@@ -1,11 +1,11 @@
 import stat
 import threading
-import time
 import uuid
 from pathlib import Path
 
 from iris.approval_hook import MAX_SUMMARY_CHARS, summarize_tool_call
 from iris.approvals import ApprovalQueue, ApprovalServer, request_approval
+from tests.waiting import wait_until
 
 
 def test_approval_socket_is_owner_only():
@@ -25,8 +25,7 @@ def test_hook_blocks_until_operator_decision(tmp_path):
     result = []
     thread = threading.Thread(target=lambda: result.append(request_approval(server.path, "run tool")))
     thread.start()
-    while not queue.pending():
-        time.sleep(0.005)
+    wait_until(queue.pending, message="queue never received a pending approval")
     assert thread.is_alive()
     queue.resolve(True)
     thread.join(1)

@@ -16,6 +16,12 @@ import yaml
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 
+# A mutation that removes a guard rail can leave a test waiting on something
+# that will now never happen. Without a bound the suite hangs, the whole job is
+# killed by the CI timeout, and the log shows no verdict at all -- so cap each
+# run well above the honest suite runtime and report the hang as its own class.
+RUN_TIMEOUT_SECONDS = 120.0
+
 
 class ManifestError(RuntimeError):
     pass
@@ -45,6 +51,10 @@ def apply_mutation(entry: dict) -> tuple[str, str]:
       "killed"   -- find matched once, mutation applied, suite went red (good).
       "survived" -- find matched once, mutation applied, suite stayed green
                     (the invariant is unguarded by any test).
+      "timeout"  -- the suite neither passed nor failed within
+                    RUN_TIMEOUT_SECONDS. A test is waiting on something the
+                    mutation prevents. That is a non-deterministic suite
+                    defect, not a kill: bound the wait so the test fails fast.
       "stale"    -- find did not match exactly once. The manifest text no
                     longer matches iris/ (usually because a legitimate fix
                     changed the surrounding source) -- this is a manifest
@@ -62,7 +72,14 @@ def apply_mutation(entry: dict) -> tuple[str, str]:
     mutated = original.replace(entry["find"], entry["replace"], 1)
     try:
         target.write_text(mutated)
-        result = _run([sys.executable, "-m", "pytest", "-q", "-x"])
+        try:
+            result = _run([sys.executable, "-m", "pytest", "-q", "-x"],
+                          timeout=RUN_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            return "timeout", (
+                f"pytest did not finish within {RUN_TIMEOUT_SECONDS:.0f}s -- a test is "
+                "blocking on a condition this mutation prevents; give that wait a bound "
+                "so it fails fast instead of hanging")
         if result.returncode == 0:
             return "survived", "pytest exited 0 (suite stayed green) -- SURVIVED"
         return "killed", f"pytest exited {result.returncode} -- KILLED"
@@ -90,32 +107,38 @@ def main(argv=None) -> int:
     rows = []
     survived = 0
     stale = 0
+    timed_out = 0
     for entry in mutations:
         try:
             status, detail = apply_mutation(entry)
         except ManifestError as error:
-            print(f"MANIFEST ERROR on {entry['id']}: {error}")
+            print(f"MANIFEST ERROR on {entry['id']}: {error}", flush=True)
             return 1
         verdict = status.upper()
         if status == "survived":
             survived += 1
         elif status == "stale":
             stale += 1
+        elif status == "timeout":
+            timed_out += 1
         rows.append((entry["id"], entry["file"], verdict, detail))
-        print(f"{verdict:9s} {entry['id']:32s} {entry['file']}")
+        # Flush per mutation: CI captures stdout through a pipe, so without this
+        # a run that dies part way through shows no verdicts at all.
+        print(f"{verdict:9s} {entry['id']:32s} {entry['file']}", flush=True)
 
     print()
     print(f"{'id':32s} {'file':24s} verdict")
     print("-" * 72)
     for mutation_id, file, verdict, detail in rows:
         print(f"{mutation_id:32s} {file:24s} {verdict}")
-        if verdict == "STALE":
+        if verdict in ("STALE", "TIMEOUT"):
             print(f"  {detail}")
 
     total = len(rows)
-    killed = total - survived - stale
+    killed = total - survived - stale - timed_out
     print()
-    print(f"{total} mutations run, {killed} killed, {survived} survived, {stale} stale")
+    print(f"{total} mutations run, {killed} killed, {survived} survived, "
+          f"{stale} stale, {timed_out} timed out", flush=True)
 
     if total < args.assert_min:
         print(f"FAIL: only {total} mutations ran, expected at least {args.assert_min}")
@@ -123,6 +146,10 @@ def main(argv=None) -> int:
     if stale:
         print(f"FAIL: {stale} manifest entry(ies) no longer match the current source -- "
               f"update find/replace in the manifest, this is not evidence of an unguarded invariant")
+        return 1
+    if timed_out:
+        print(f"FAIL: {timed_out} mutation(s) hung the suite instead of failing it -- "
+              f"bound the blocking wait so the invariant is proven by a fast failure")
         return 1
     if survived:
         print(f"FAIL: {survived} mutation(s) survived (invariant unguarded by tests)")

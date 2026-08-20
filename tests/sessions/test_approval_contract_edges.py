@@ -1,9 +1,9 @@
 import io
 import json
 import threading
-import time
 
 from iris.approvals import ApprovalQueue, ApprovalServer, request_approval
+from tests.waiting import wait_until
 
 
 class Connection:
@@ -82,8 +82,7 @@ def test_resolve_rejects_empty_queue_unknown_id_and_wrong_origin():
         "danger", timeout=1, origin=("D1", "1.0")
     )))
     thread.start()
-    while not queue.pending():
-        time.sleep(0.005)
+    wait_until(queue.pending, message="queue never received a pending approval")
 
     assert queue.resolve(True, index=999, origin=("D1", "1.0")) is False
     assert queue.resolve(True, index=1, origin=("D2", "2.0")) is False
@@ -153,8 +152,8 @@ def test_server_ignores_broken_pipe_while_returning_decision(tmp_path):
     assert len(queue.calls) == 1
 
 
-def test_server_start_replaces_stale_socket_path_and_close_is_idempotent(tmp_path):
-    path = tmp_path / "approval.sock"
+def test_server_start_replaces_stale_socket_path_and_close_is_idempotent(socket_dir):
+    path = socket_dir / "approval.sock"
     path.write_text("stale")
     server = ApprovalServer(path, ApprovalQueue(notifier=lambda _text: None), timeout=0.01)
     server.start()
@@ -172,10 +171,10 @@ def test_request_approval_rejects_partial_origin_before_socket_io(tmp_path):
     assert request_approval(tmp_path / "missing.sock", "x", thread_ts="1.0") is False
 
 
-def test_request_approval_denies_nonobject_server_response(tmp_path):
+def test_request_approval_denies_nonobject_server_response(socket_dir):
     import socket
 
-    path = tmp_path / "response.sock"
+    path = socket_dir / "response.sock"
     ready = threading.Event()
 
     def serve():
@@ -190,6 +189,8 @@ def test_request_approval_denies_nonobject_server_response(tmp_path):
 
     worker = threading.Thread(target=serve)
     worker.start()
-    ready.wait(1)
+    # Without this the listener could die before binding and the assertion
+    # below would pass against a missing socket instead of the "[]" reply.
+    assert ready.wait(1), "listener thread never bound the socket"
     assert request_approval(path, "x") is False
     worker.join(1)

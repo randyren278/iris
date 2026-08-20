@@ -10,6 +10,7 @@ from iris.agent_actions import AgentActionError, AgentActionServer, request_acti
 from iris.approvals import ApprovalQueue
 from iris.projects import ProjectCatalog
 from iris.sessions import GatewayDisarmedError
+from tests.waiting import wait_until
 
 
 class RecordingSessions:
@@ -24,14 +25,14 @@ class RecordingSessions:
         return SimpleNamespace(id=9, tool=tool, cwd=str(kwargs["cwd"]))
 
 
-def _server(tmp_path):
+def _server(tmp_path, socket_dir):
     project = tmp_path / "Iris"
     project.mkdir(exist_ok=True)
     notices = []
     queue = ApprovalQueue(notifier=lambda _message: (_ for _ in ()).throw(RuntimeError("unbound")))
     sessions = RecordingSessions()
     server = AgentActionServer(
-        tmp_path / "agent-action.sock",
+        socket_dir / "agent-action.sock",
         queue,
         ProjectCatalog.discover(tmp_path),
         sessions,
@@ -42,8 +43,8 @@ def _server(tmp_path):
     return server, queue, sessions, notices, project
 
 
-def test_start_coding_action_waits_for_exact_origin_approval(tmp_path):
-    server, queue, sessions, notices, project = _server(tmp_path)
+def test_start_coding_action_waits_for_exact_origin_approval(tmp_path, socket_dir):
+    server, queue, sessions, notices, project = _server(tmp_path, socket_dir)
     outcome = []
     worker = threading.Thread(target=lambda: outcome.append(request_action(
         server.path,
@@ -53,8 +54,7 @@ def test_start_coding_action_waits_for_exact_origin_approval(tmp_path):
         thread_ts="11.2",
     )))
     worker.start()
-    while not queue.pending():
-        time.sleep(0.005)
+    wait_until(queue.pending, message="queue never received a pending approval")
 
     assert sessions.calls == []
     assert notices and notices[0][:2] == ("D-1", "11.2")
@@ -74,8 +74,8 @@ def test_start_coding_action_waits_for_exact_origin_approval(tmp_path):
     })]
 
 
-def test_denied_agent_action_never_launches_session(tmp_path):
-    server, queue, sessions, _notices, _project = _server(tmp_path)
+def test_denied_agent_action_never_launches_session(tmp_path, socket_dir):
+    server, queue, sessions, _notices, _project = _server(tmp_path, socket_dir)
     errors = []
 
     def run():
@@ -92,8 +92,7 @@ def test_denied_agent_action_never_launches_session(tmp_path):
 
     worker = threading.Thread(target=run)
     worker.start()
-    while not queue.pending():
-        time.sleep(0.005)
+    wait_until(queue.pending, message="queue never received a pending approval")
     assert queue.resolve(False, index=1, origin=("D-1", "12.1"))
     worker.join(1)
     server.close()
@@ -123,8 +122,8 @@ def test_action_schema_is_exact_nonempty_and_bounded():
             validate_start_coding(arguments)
 
 
-def test_action_socket_replaces_stale_path_and_is_owner_only(tmp_path):
-    path = tmp_path / "agent-action.sock"
+def test_action_socket_replaces_stale_path_and_is_owner_only(tmp_path, socket_dir):
+    path = socket_dir / "agent-action.sock"
     path.write_text("stale")
     project = tmp_path / "Iris"
     project.mkdir()
@@ -219,9 +218,9 @@ def test_request_action_rejects_incomplete_identity_and_unavailable_daemon(tmp_p
         request_action(tmp_path / "missing.sock", "start_coding", {}, channel_id="D1", thread_ts="1.0")
 
 
-def test_request_action_fails_closed_on_invalid_and_denied_server_reply(tmp_path):
+def test_request_action_fails_closed_on_invalid_and_denied_server_reply(tmp_path, socket_dir):
     def one_reply(raw):
-        path = tmp_path / f"reply-{time.time_ns()}.sock"
+        path = socket_dir / f"reply-{time.time_ns()}.sock"
         ready = threading.Event()
 
         def serve():

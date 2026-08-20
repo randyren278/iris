@@ -1,5 +1,4 @@
 import threading
-import time
 from types import SimpleNamespace
 
 from iris.approvals import ApprovalQueue, ApprovalServer, request_approval
@@ -8,6 +7,7 @@ from iris.projects import ProjectCatalog
 from iris.registry import SessionRegistry
 from iris.router import CommandRouter
 from iris.sessions import SessionController
+from tests.waiting import wait_until
 
 
 class FakeSessions:
@@ -74,12 +74,10 @@ def test_indexed_approval_command_resolves_the_requested_pending_action(tmp_path
 
     first = threading.Thread(target=lambda: results.setdefault("first", queue.request("first", timeout=1)))
     first.start()
-    while len(queue.pending()) < 1:
-        time.sleep(0.005)
+    wait_until(lambda: len(queue.pending()) >= 1, message="queue never reached 1 pending approval(s)")
     second = threading.Thread(target=lambda: results.setdefault("second", queue.request("second", timeout=1)))
     second.start()
-    while len(queue.pending()) < 2:
-        time.sleep(0.005)
+    wait_until(lambda: len(queue.pending()) >= 2, message="queue never reached 2 pending approval(s)")
 
     assert router.handle(_message("y 2")) == "Approval 2 recorded."
     queue.resolve(False, index=1)
@@ -89,7 +87,7 @@ def test_indexed_approval_command_resolves_the_requested_pending_action(tmp_path
     assert results == {"first": False, "second": True}
 
 
-def test_approval_socket_routes_and_resolves_only_in_exact_origin_thread(tmp_path):
+def test_approval_socket_routes_and_resolves_only_in_exact_origin_thread(socket_dir):
     fallback = []
     routed = []
     queue = ApprovalQueue(notifier=fallback.append)
@@ -98,7 +96,7 @@ def test_approval_socket_routes_and_resolves_only_in_exact_origin_thread(tmp_pat
         return lambda text: routed.append((channel_id, thread_ts, text))
 
     server = ApprovalServer(
-        tmp_path / "approval.sock",
+        socket_dir / "approval.sock",
         queue,
         timeout=1,
         notifier_for_context=notifier_for_context,
@@ -112,8 +110,7 @@ def test_approval_socket_routes_and_resolves_only_in_exact_origin_thread(tmp_pat
         thread_ts="42.1",
     )))
     worker.start()
-    while not queue.pending():
-        time.sleep(0.005)
+    wait_until(queue.pending, message="queue never received a pending approval")
 
     assert not queue.resolve(True, index=1, origin=("D-origin", "WRONG"))
     assert worker.is_alive()
