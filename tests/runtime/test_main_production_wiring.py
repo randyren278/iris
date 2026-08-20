@@ -9,6 +9,7 @@ import iris.doctor as doctor_module
 import iris.launcher as launcher_module
 import iris.main as main_module
 import iris.runtime as runtime_module
+import iris.session_transport as session_transport_module
 import iris.sessions as sessions_module
 import iris.slack as slack_module
 import iris.slack_config as slack_config_module
@@ -112,6 +113,14 @@ class FakeLauncher:
         self.kwargs = kwargs
 
 
+class RecordingTransport:
+    instances = []
+
+    def __init__(self, notifier):
+        self.notifier = notifier
+        self.__class__.instances.append(self)
+
+
 class FakeSessionController:
     instances = []
 
@@ -211,6 +220,7 @@ def install_fakes(monkeypatch, tmp_path):
     monkeypatch.setattr(action_module, "AgentActionServer", RecordingActionServer)
     monkeypatch.setattr(launcher_module, "Launcher", FakeLauncher)
     monkeypatch.setattr(sessions_module, "SessionController", FakeSessionController)
+    monkeypatch.setattr(session_transport_module, "SessionTransport", RecordingTransport)
     monkeypatch.setattr(conversation_module, "ClaudeMCPAgentAdapter", RecordingAdapter)
     monkeypatch.setattr(conversation_module, "GeneralAgentCoordinator", FakeCoordinator)
     return projects, state_dir
@@ -218,7 +228,8 @@ def install_fakes(monkeypatch, tmp_path):
 
 def reset_fakes():
     for cls in (RecordingRuntime, RecordingClient, RecordingApprovalServer, RecordingActionServer,
-                FakeSessionController, RecordingAdapter, RecordingSlackGateway, RecordingSource):
+                FakeSessionController, RecordingAdapter, RecordingSlackGateway, RecordingSource,
+                RecordingTransport):
         cls.instances.clear()
     RecordingRuntime.start_result = True
     RecordingSource.error = None
@@ -249,6 +260,26 @@ def test_main_composes_current_agentic_daemon_and_cleans_up(monkeypatch, tmp_pat
         "channel_id": "D1",
         "thread_ts": "1.0",
     }
+
+
+def test_session_output_is_chunked_to_its_origin_thread_and_metered(monkeypatch, tmp_path):
+    reset_fakes()
+    install_fakes(monkeypatch, tmp_path)
+
+    main_module.main()
+
+    client = RecordingClient.instances[-1]
+    runtime = RecordingRuntime.instances[-1]
+    before = runtime.events.count("outbound")
+    client.posts.clear()
+
+    RecordingTransport.instances[-1].notifier("D-9", "9.1", "word " * 1000)
+
+    assert len(client.posts) == 2
+    assert {post["channel_id"] for post in client.posts} == {"D-9"}
+    assert {post["thread_ts"] for post in client.posts} == {"9.1"}
+    # Every chunk that reaches Slack must be metered, not just the first.
+    assert runtime.events.count("outbound") == before + 2
 
 
 def test_main_closes_servers_and_runtime_when_socket_source_fails(monkeypatch, tmp_path):

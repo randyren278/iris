@@ -42,6 +42,9 @@ jobs:
           coverage report -m
           coverage json -o coverage.json
 
+      - name: Enforce per-module floor for production-critical modules
+        run: python scripts/checks/coverage_gate.py --coverage-json coverage.json --floor 95.0
+
       - name: Audit production wiring
         run: python scripts/checks/wiring_audit.py
 
