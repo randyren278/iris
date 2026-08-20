@@ -89,7 +89,9 @@ def test_online_but_disarmed_is_orange_and_explicit(tmp_path):
     assert color(output) == "orange"
     assert "Online" in output
     assert "Control: DISARMED — re-arm from Terminal" in output
-    assert "rearm" not in output.lower().split("Restart Iris", 1)[1]
+    # The menu may explain terminal-only re-arm, but it must not expose a menu
+    # action that performs it. Everything after the Restart item is action UI.
+    assert "rearm" not in output.lower().split("restart iris", 1)[1]
 
 
 def test_offline_is_red(tmp_path):
