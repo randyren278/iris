@@ -98,6 +98,8 @@ def serve(tools):
     for line in sys.stdin:
         try:
             request = json.loads(line)
+            if not isinstance(request, dict):
+                continue
             method, identifier = request.get("method"), request.get("id")
             if method == "initialize":
                 _reply(identifier, {"protocolVersion": "2024-11-05", "capabilities": {"tools": {}},
@@ -106,8 +108,10 @@ def serve(tools):
                 _reply(identifier, {"tools": tool_specs(tools)})
             elif method == "tools/call":
                 params = request.get("params", {})
+                if not isinstance(params, dict):
+                    continue
                 _reply(identifier, dispatch(tools, params.get("name"), params.get("arguments", {})))
-        except (TypeError, ValueError, json.JSONDecodeError):
+        except (TypeError, ValueError, json.JSONDecodeError, AttributeError):
             continue
 
 
