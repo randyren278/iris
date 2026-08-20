@@ -20,7 +20,9 @@ class EventKitCalendarProvider:
     """Read upcoming events from EventKit without exposing any write surface."""
 
     def __init__(self, *, days: int = DEFAULT_DAYS, now=None, store=None):
-        if not isinstance(days, int) or not 1 <= days <= MAX_DAYS:
+        # bool is an int subclass in Python; accepting True here would silently
+        # turn an invalid configuration into a one-day Calendar window.
+        if isinstance(days, bool) or not isinstance(days, int) or not 1 <= days <= MAX_DAYS:
             raise ValueError(f"days must be between 1 and {MAX_DAYS}")
         self.days = days
         self._now = now or (lambda: datetime.now(timezone.utc))
