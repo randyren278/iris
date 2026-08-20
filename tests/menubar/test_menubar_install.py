@@ -32,10 +32,12 @@ def test_install_creates_a_missing_plugin_directory(tmp_path):
     assert (plugin_dir / PLUGIN).is_file()
 
 
-def test_install_is_idempotent(tmp_path):
+def test_install_is_idempotent_and_refreshes_a_stale_copy(tmp_path):
+    installed = tmp_path / PLUGIN
+    installed.write_text("#!/bin/bash\necho stale\n")
     assert run("install", tmp_path).returncode == 0
     assert run("install", tmp_path).returncode == 0
-    assert (tmp_path / PLUGIN).is_file()
+    assert installed.read_text() == (REPO / "scripts" / "menubar" / PLUGIN).read_text()
 
 
 def test_remove_takes_the_plugin_back_out(tmp_path):
@@ -65,3 +67,21 @@ def test_unknown_action_is_rejected(tmp_path):
 def test_installers_wire_the_menu_bar_in_and_out():
     assert "menubar/install-plugin.sh" in (REPO / "scripts" / "install.sh").read_text()
     assert "install-plugin.sh" in (REPO / "scripts" / "uninstall.sh").read_text()
+
+
+def test_install_does_not_claim_success_until_socket_mode_is_healthy():
+    source = (REPO / "scripts" / "install.sh").read_text()
+    deploy = source.index('menubar/install-plugin.sh\" install')
+    verify = source.index("iris.irisctl verify-online")
+    success = source.index("Socket Mode is online")
+    assert deploy < verify < success
+    assert "did not reach a healthy Socket Mode heartbeat" in source
+
+
+def test_live_menu_bar_probe_checks_loaded_job_fresh_copy_and_control_state():
+    source = (REPO / "scripts" / "checks" / "live_menubar.sh").read_text()
+    assert 'cmp -s "$source_plugin" "$installed"' in source
+    assert 'launchctl print "$domain/$label"' in source
+    assert "iris.irisctl verify-online" in source
+    assert "Control: DISARMED" in source
+    assert "pgrep -x SwiftBar" in source
