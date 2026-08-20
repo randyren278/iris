@@ -19,18 +19,24 @@ class CommandRouter:
         command = parse(message.text)
         if command is None:
             return "I didn't recognize that. Try `projects`, `cd <project>`, `claude <task>`, or `codex <task>`."
+        channel_id = message.channel_id
+        reply_thread_ts = getattr(message, "reply_thread_ts", None)
         if isinstance(command, Simple):
-            return self._simple(command, message.channel_id)
+            return self._simple(command, channel_id, reply_thread_ts)
         if isinstance(command, TextCommand):
             return self._text(
                 command,
-                message.channel_id,
-                getattr(message, "reply_thread_ts", None),
+                channel_id,
+                reply_thread_ts,
                 getattr(message, "thread_ts", None),
             )
-        return self._indexed(command)
+        return self._indexed(command, channel_id, reply_thread_ts)
 
-    def _simple(self, command, channel_id):
+    @staticmethod
+    def _origin(channel_id, thread_ts):
+        return (channel_id, thread_ts) if channel_id and thread_ts else None
+
+    def _simple(self, command, channel_id, thread_ts=None):
         if command.name in {"ls", "projects"}:
             names = [project.name for project in self.catalog.projects]
             return "Projects: " + (", ".join(names) if names else "none found")
@@ -46,7 +52,9 @@ class CommandRouter:
         if command.name == "stop":
             return f"Stopped {self.sessions.stop()} session(s); gateway is disarmed. Re-arm from the terminal."
         if command.name in {"y", "n"}:
-            return "Approval recorded." if self.approvals.resolve(command.name == "y") else "No pending approval."
+            return ("Approval recorded." if self.approvals.resolve(
+                command.name == "y", origin=self._origin(channel_id, thread_ts)
+            ) else "No pending approval in this thread.")
         raise AssertionError(f"unsupported simple command {command.name}")
 
     def _text(self, command, channel_id, thread_ts, scope_thread_ts=None):
@@ -107,12 +115,13 @@ class CommandRouter:
             return f"Could not start session: {error}."
         return f"Started {session.tool} session {session.id} in {session.cwd}."
 
-    def _indexed(self, command):
+    def _indexed(self, command, channel_id=None, thread_ts=None):
         if command.name == "approval":
             approved = command.text == "y"
             return (f"Approval {command.index} recorded."
-                    if self.approvals.resolve(approved, index=command.index)
-                    else f"No pending approval {command.index}.")
+                    if self.approvals.resolve(
+                        approved, index=command.index, origin=self._origin(channel_id, thread_ts)
+                    ) else f"No pending approval {command.index} in this thread.")
         if command.name == "kill":
             return f"Killed session {command.index}." if self.sessions.kill(command.index) else "No such session."
         if command.name == "session_message":
