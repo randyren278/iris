@@ -32,7 +32,9 @@ for approval in the originating Slack thread before any process starts.
 Iris stays connected while you are logged in and the Mac is awake. Slack Socket
 Mode is outbound-only, so Iris hosts no public endpoint. Slack credentials live
 in the macOS login Keychain; runtime state, memory, quarantine, approvals, and
-audit records remain under `~/.iris/`.
+audit records remain under `~/.iris/`. A SwiftBar menu item is part of the
+production control plane: it surfaces daemon health and armed/disarmed state
+without reading conversation or credential data.
 
 The name is intentional: an iris controls how much light enters. Iris should be
 powerful because it can reason across useful context while keeping authority
@@ -54,6 +56,7 @@ flowchart LR
     code -- "Claude tool call" --> toolGate{"Approve exact<br/>tool call?"}
     toolGate -- "yes" --> run["Tool runs"]
     toolGate -- "no / timeout / failure" --> deny
+    iris -- "runtime + disarm marker" --> bar["SwiftBar<br/>health/control state"]
     reads --> you
     run --> you
     deny --> you
@@ -73,13 +76,17 @@ a daemon-owned local socket plus exact Slack approval.
   Iris to carry out coding work, the agent can choose `claude` or `codex`, a
   project name, and a task. The daemon resolves the project beneath
   `projects_root`, posts the exact request to the originating Slack thread, and
-  starts nothing unless you approve it.
+  starts nothing unless you approve it in that same origin.
 - **Use explicit coding commands.** `claude <task>` and `codex <task>` remain
   available when you want deterministic control. Claude sessions stream output
   back to their Slack thread and accept follow-up prompts. Codex currently runs
   headless inside a forced `workspace-write` sandbox; its individual tool calls
   are not Slack-approved and its running session is not steerable through the
   Claude stream transport.
+- **See control readiness locally.** SwiftBar shows daemon/socket health and
+  persistent emergency-stop state. Green means a fresh heartbeat from a live
+  process **and** an armed action plane. Healthy-but-disarmed is orange; a dead
+  or recorded-offline daemon is red.
 - **Remember carefully.** `remember <claim>` writes an operator-confirmed
   provenance record. Corrections supersede prior claims; forgetting hides a
   claim from retrieval while retaining an audit-preserving tombstone.
@@ -136,10 +143,12 @@ Iris's explicit PreToolUse approval hook.
 
 ## Install
 
-**Prerequisites:** macOS, Python 3.13+, a Slack workspace where you can create
-an app, and locally installed/authenticated `claude` and `codex` CLIs.
+**Prerequisites:** macOS, Python 3.13+, SwiftBar installed in `/Applications`, a
+Slack workspace where you can create an app, and locally installed/authenticated
+`claude` and `codex` CLIs.
 
 ```sh
+brew install --cask swiftbar
 git clone https://github.com/randyren278/iris.git
 cd iris
 python3.13 -m venv .venv
@@ -166,16 +175,20 @@ the background service:
 ```sh
 .venv/bin/python -m iris.slack_probe
 ./scripts/install.sh
-.venv/bin/python -m iris.irisctl verify-online
+bash scripts/checks/live_menubar.sh
 ```
 
 `install.sh` writes one launchd agent at
-`~/Library/LaunchAgents/com.iris.gateway.plist`, starts it, and configures a
-minimal runtime `PATH` for the local CLIs. It does not copy credentials or
-project state into the repository.
+`~/Library/LaunchAgents/com.iris.gateway.plist`, configures a minimal runtime
+`PATH` for the local CLIs, installs the **current checkout's** SwiftBar plugin,
+launches SwiftBar, starts Iris, and waits for a fresh Socket Mode heartbeat from
+a live PID before reporting success. It fails instead of claiming a complete
+production install when SwiftBar is absent or daemon readiness never arrives.
+It does not copy credentials or project state into the repository.
 
-It also installs the optional read-only SwiftBar menu-bar indicator. See
-[Operations](docs/OPERATIONS.md#menu-bar-indicator).
+The menu bar is read-only: it reads `~/.iris/runtime.json` and the presence of
+`~/.iris/disarmed`, not messages, prompts, credentials, memory, audit content,
+or senses. See [Operations](docs/OPERATIONS.md#menu-bar-indicator).
 
 For Calendar, macOS asks for EventKit access the first time you run the probe:
 
@@ -198,7 +211,7 @@ provider performs reads only and exposes no Calendar write operation.
 Once the daemon is online, DM Iris normally. For example, “inspect the Iris
 repo and fix the failing tests” may cause the general agent to research first,
 then request an approval such as “start Claude in Iris: fix the failing tests.”
-Nothing starts until you answer the approval.
+Nothing starts until you answer the approval in its originating thread.
 
 Explicit commands remain available:
 
@@ -216,8 +229,8 @@ Explicit commands remain available:
 | `memories` | List retrievable trusted memory claims. |
 | `correct <id> <claim>` | Add a replacement claim that supersedes a prior one. |
 | `forget <id>` | Hide a claim from future retrieval while retaining its tombstone. |
-| `y` / `n` | Approve or deny the oldest pending approval. |
-| `y <id>` / `n <id>` | Resolve one exact pending approval when several are active. |
+| `y` / `n` | Approve or deny the oldest pending approval in the current Slack thread. |
+| `y <id>` / `n <id>` | Resolve one exact pending approval only from its originating thread. |
 
 For weather, include a city: `what's the weather in Manila?` Iris returns
 bounded current conditions and provider attribution rather than guessing your
@@ -248,6 +261,8 @@ read-only MCP tools              │
       exact Slack approval
              │
              └─ daemon validates project + launches session
+
+runtime.json + disarmed marker ──► read-only SwiftBar control plane
 ```
 
 The model never receives a direct process handle from the general-agent path.
@@ -264,28 +279,31 @@ validated again.
 .venv/bin/python -m iris.irisctl restart
 .venv/bin/python -m iris.irisctl rearm
 
-# Entire deterministic suite
-.venv/bin/python -m pytest -q
+# Entire deterministic suite with enforced production branch coverage
+coverage run -m pytest -q
+coverage report -m
 
 # Structural production-wiring check
 .venv/bin/python scripts/checks/wiring_audit.py
 
-# Optional live provider / CLI probes
+# Live provider / CLI / local-control probes
 .venv/bin/python -m iris.weather_probe
 .venv/bin/python -m iris.web_probe
 .venv/bin/python -m iris.agent_probe
 .venv/bin/python -m iris.hook_probe
 .venv/bin/python -m iris.senses.calendar_probe
+bash scripts/checks/live_menubar.sh
 
 # Remove Iris's launchd agent and menu indicator
 ./scripts/uninstall.sh
 ```
 
 The deterministic suite proves schemas, routing, denial behavior, thread
-binding, action approvals, persistence, and fake-backed integrations. Live
-probes remain necessary for Slack credentials, current Claude/Codex CLI
-behavior, EventKit permissions, and real provider reachability. See
-[Operations](docs/OPERATIONS.md) for the complete verification matrix.
+binding, action approvals, persistence, and fake-backed integrations. CI also
+enforces branch-aware coverage over production `iris/` modules. Live probes
+remain necessary for Slack credentials, current Claude/Codex CLI behavior,
+EventKit permissions, SwiftBar/launchd state, and real provider reachability.
+See [Operations](docs/OPERATIONS.md) for the complete verification matrix.
 
 ## Repository map
 
