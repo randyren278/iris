@@ -49,6 +49,25 @@ def test_claude_approval_hook_uses_the_private_local_socket(tmp_path):
     assert kwargs["env"]["IRIS_APPROVAL_SOCKET"] == str(tmp_path / "approval.sock")
 
 
+def test_claude_approval_hook_receives_exact_slack_origin(tmp_path):
+    calls = []
+    launcher = Launcher(
+        popen=lambda *args, **kwargs: calls.append((args, kwargs)) or Process(),
+        environ={"PATH": "x"}, approval_socket=tmp_path / "approval.sock",
+    )
+
+    launcher.launch(
+        "claude",
+        cwd=tmp_path,
+        prompt="fix tests",
+        approval_context=("D-origin", "42.1"),
+    )
+
+    environment = calls[0][1]["env"]
+    assert environment["IRIS_APPROVAL_CHANNEL_ID"] == "D-origin"
+    assert environment["IRIS_APPROVAL_THREAD_TS"] == "42.1"
+
+
 def test_streaming_claude_uses_the_required_verbose_flag(tmp_path):
     calls = []
     launcher = Launcher(
