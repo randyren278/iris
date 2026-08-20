@@ -50,6 +50,7 @@ def main():
     from iris.slack_config import load_credentials
     from iris.audit import AuditLog
     from iris.approvals import ApprovalQueue, ApprovalServer
+    from iris.agent_actions import AgentActionServer
     from iris.launcher import Launcher
     from iris.projects import ProjectCatalog
     from iris.registry import SessionRegistry
@@ -97,18 +98,25 @@ def main():
         notifier_for_context=notifier_for_approval,
     )
     approval_server.start()
-    memory = MemoryStore(state_dir / "memory.json")
-    router = CommandRouter(
-        ProjectCatalog.discover(config.projects_root),
-        SessionController(
-            SessionRegistry(state_dir / "sessions.json"),
-            Launcher(approval_socket=approval_server.path, streaming=True),
-            transport=transport,
-            disarm_path=state_dir / "disarmed",
-        ),
-        approvals,
-        memory=memory,
+
+    projects = ProjectCatalog.discover(config.projects_root)
+    sessions = SessionController(
+        SessionRegistry(state_dir / "sessions.json"),
+        Launcher(approval_socket=approval_server.path, streaming=True),
+        transport=transport,
+        disarm_path=state_dir / "disarmed",
     )
+    memory = MemoryStore(state_dir / "memory.json")
+    router = CommandRouter(projects, sessions, approvals, memory=memory)
+
+    action_server = AgentActionServer(
+        state_dir / "agent-action.sock",
+        approvals,
+        projects,
+        sessions,
+        notifier_for_context=notifier_for_approval,
+    )
+    action_server.start()
 
     def memory_context(_key, query):
         return tuple(MemoryContext(item.claim, item.trust, item.source_ref)
@@ -116,8 +124,15 @@ def main():
 
     conversation = GeneralAgentCoordinator(
         AgentRuntime({}),
-        lambda _message, turns, context: ClaudeMCPAgentAdapter(
-            config.projects_root, state_dir / "senses.json", turns, context),
+        lambda message, turns, context: ClaudeMCPAgentAdapter(
+            config.projects_root,
+            state_dir / "senses.json",
+            turns,
+            context,
+            action_socket=action_server.path,
+            channel_id=message.channel_id,
+            thread_ts=message.reply_thread_ts,
+        ),
         context_provider=memory_context,
     )
 
@@ -134,6 +149,7 @@ def main():
         source.run(gateway.handle_envelope, on_connected=runtime.connected,
                    on_disconnected=runtime.disconnected)
     finally:
+        action_server.close()
         approval_server.close()
         runtime.close()
 
