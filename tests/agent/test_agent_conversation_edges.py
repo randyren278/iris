@@ -134,9 +134,9 @@ def test_coordinator_keeps_short_term_history_per_thread_and_trims_to_bound():
     assert coordinator.reply(message("three", thread="A")) == "answer-three"
     assert coordinator.reply(message("separate", thread="B")) == "answer-separate"
 
-    # Before answering the third A turn, the previous two user/assistant pairs
-    # plus the new user message are visible. After the response the deque trims
-    # back to four messages for the next turn.
+    # Before answering a turn, the bounded stored history is visible together
+    # with the just-appended current user message. After the response, storage
+    # trims back to max_messages for the following turn.
     assert snapshots[2][1] == [
         ("user", "one"), ("assistant", "answer-one"),
         ("user", "two"), ("assistant", "answer-two"),
@@ -144,6 +144,7 @@ def test_coordinator_keeps_short_term_history_per_thread_and_trims_to_bound():
     ]
     coordinator.reply(message("four", thread="A"))
     assert snapshots[-1][1] == [
+        ("user", "two"),
         ("assistant", "answer-two"),
         ("user", "three"),
         ("assistant", "answer-three"),
