@@ -48,3 +48,28 @@ jobs:
         run: >-
           python scripts/checks/link_check.py
           README.md docs/ARCHITECTURE.md docs/OPERATIONS.md docs/slack-setup.md
+
+  mutation:
+    name: Safety mutation guard
+    needs: deterministic
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install package and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]'
+
+      - name: Deliberately break safety invariants and require the suite to catch each mutation
+        run: >-
+          python scripts/checks/mutation_guard.py
+          --manifest scripts/checks/mutations.yaml --assert-min 18
