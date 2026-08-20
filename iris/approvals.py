@@ -10,11 +10,14 @@ import threading
 import time
 from collections.abc import Callable
 
+ApprovalOrigin = tuple[str, str]
+
 
 @dataclasses.dataclass
 class PendingApproval:
     id: int
     summary: str
+    origin: ApprovalOrigin | None = None
     decided: bool | None = None
 
 
@@ -26,10 +29,14 @@ class ApprovalQueue:
         self._pending: list[PendingApproval] = []
         self._next_id = 1
 
-    def request(self, summary: str, *, timeout: float, notifier: Callable[[str], None] | None = None) -> bool:
+    def request(self, summary: str, *, timeout: float, notifier: Callable[[str], None] | None = None,
+                origin: ApprovalOrigin | None = None) -> bool:
+        if origin is not None and (not isinstance(origin, tuple) or len(origin) != 2
+                                   or not all(isinstance(value, str) and value for value in origin)):
+            return False
         notify = notifier or self._notifier
         with self._condition:
-            request = PendingApproval(self._next_id, summary)
+            request = PendingApproval(self._next_id, summary, origin=origin)
             self._next_id += 1
             self._pending.append(request)
             deadline = self._clock() + timeout
@@ -60,7 +67,8 @@ class ApprovalQueue:
             return False
         return decision is True
 
-    def resolve(self, approved: bool, *, index: int | None = None) -> bool:
+    def resolve(self, approved: bool, *, index: int | None = None,
+                origin: ApprovalOrigin | None = None) -> bool:
         with self._condition:
             if not self._pending:
                 return False
@@ -70,6 +78,8 @@ class ApprovalQueue:
                 request = next((item for item in self._pending if item.id == index), None)
                 if request is None:
                     return False
+            if request.origin is not None and request.origin != origin:
+                return False
             request.decided = approved
             self._condition.notify_all()
             return True
@@ -139,12 +149,16 @@ class ApprovalServer:
                 if bool(channel_id) != bool(thread_ts):
                     raise ValueError("approval origin is incomplete")
                 notifier = None
+                origin = None
                 if channel_id and thread_ts:
                     if (not isinstance(channel_id, str) or not isinstance(thread_ts, str)
                             or self._notifier_for_context is None):
                         raise ValueError("approval origin is unavailable")
+                    origin = (channel_id, thread_ts)
                     notifier = self._notifier_for_context(channel_id, thread_ts)
-                approved = self.queue.request(summary, timeout=self.timeout, notifier=notifier)
+                approved = self.queue.request(
+                    summary, timeout=self.timeout, notifier=notifier, origin=origin,
+                )
             except (OSError, ValueError, json.JSONDecodeError, KeyError, TypeError):
                 approved = False
             try:
