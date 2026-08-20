@@ -89,7 +89,7 @@ def test_indexed_approval_command_resolves_the_requested_pending_action(tmp_path
     assert results == {"first": False, "second": True}
 
 
-def test_approval_socket_routes_notice_to_exact_origin_thread(tmp_path):
+def test_approval_socket_routes_and_resolves_only_in_exact_origin_thread(tmp_path):
     fallback = []
     routed = []
     queue = ApprovalQueue(notifier=fallback.append)
@@ -114,7 +114,10 @@ def test_approval_socket_routes_notice_to_exact_origin_thread(tmp_path):
     worker.start()
     while not queue.pending():
         time.sleep(0.005)
-    queue.resolve(True, index=1)
+
+    assert not queue.resolve(True, index=1, origin=("D-origin", "WRONG"))
+    assert worker.is_alive()
+    assert queue.resolve(True, index=1, origin=("D-origin", "42.1"))
     worker.join(1)
     server.close()
 
