@@ -28,7 +28,7 @@ class IndexedCommand(Command):
     text: str = ""
 
 
-_SIMPLE = {"ls", "projects", "sessions", "link", "y", "n", "stop", "memories"}
+_SIMPLE = {"ls", "projects", "sessions", "y", "n", "stop", "memories"}
 _TEXT = {"cd", "claude", "codex", "remember", "forget", "correct"}
 _INDEXED = re.compile(r"^@(\d+)\s+(.+)$")
 _KILL = re.compile(r"^kill\s+(\d+)$")
