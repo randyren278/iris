@@ -69,6 +69,16 @@ def test_installers_wire_the_menu_bar_in_and_out():
     assert "install-plugin.sh" in (REPO / "scripts" / "uninstall.sh").read_text()
 
 
+def test_production_install_requires_swiftbar_and_a_running_menu_process():
+    source = INSTALLER.read_text()
+    assert "SwiftBar is required for the Iris production control plane" in source
+    assert '[ ! -d "/Applications/SwiftBar.app" ]' in source
+    assert "exit 1" in source
+    assert "open -ga SwiftBar" in source
+    assert "pgrep -x SwiftBar" in source
+    assert "skipping the menu bar indicator" not in source.lower()
+
+
 def test_install_does_not_claim_success_until_socket_mode_is_healthy():
     source = (REPO / "scripts" / "install.sh").read_text()
     deploy = source.index('menubar/install-plugin.sh\" install')
