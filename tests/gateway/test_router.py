@@ -46,8 +46,8 @@ class FakeApprovals:
         self.results = {}
         self.calls = []
 
-    def resolve(self, approved, *, index=None):
-        self.calls.append((approved, index))
+    def resolve(self, approved, *, index=None, origin=None):
+        self.calls.append((approved, index, origin))
         return self.results.get(index, self.results.get(None, False))
 
 
@@ -110,7 +110,9 @@ def test_router_lists_projects_and_empty_catalog(tmp_path):
     assert commands.handle(message("projects")) == "Projects: Beta, Iris"
     assert commands.handle(message("ls")) == "Projects: Beta, Iris"
 
-    empty = CommandRouter(ProjectCatalog.discover(tmp_path / "missing"), FakeSessions(), FakeApprovals())
+    empty_root = tmp_path / "empty-root"
+    empty_root.mkdir()
+    empty = CommandRouter(ProjectCatalog.discover(empty_root), FakeSessions(), FakeApprovals())
     assert empty.handle(message("projects")) == "Projects: none found"
 
 
@@ -134,10 +136,16 @@ def test_router_bare_and_indexed_approval_resolution(tmp_path):
 
     assert commands.handle(message("y")) == "Approval recorded."
     approvals.results[None] = False
-    assert commands.handle(message("n")) == "No pending approval."
+    assert commands.handle(message("n")) == "No pending approval in this thread."
     assert commands.handle(message("y 7")) == "Approval 7 recorded."
-    assert commands.handle(message("n 8")) == "No pending approval 8."
-    assert approvals.calls == [(True, None), (False, None), (True, 7), (False, 8)]
+    assert commands.handle(message("n 8")) == "No pending approval 8 in this thread."
+    origin = ("D-1", "1.0")
+    assert approvals.calls == [
+        (True, None, origin),
+        (False, None, origin),
+        (True, 7, origin),
+        (False, 8, origin),
+    ]
 
 
 def test_router_memory_requires_configuration_and_preserves_provenance(tmp_path):
