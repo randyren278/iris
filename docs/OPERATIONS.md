@@ -5,8 +5,8 @@
 Iris separates deterministic evidence from live dependency evidence. `pytest`
 must prove schemas, routing, concurrency, denial behavior, state persistence, and
 fake-backed integrations without requiring Slack or a model account. Separate
-operator probes then verify the installed Slack, Claude/Codex, EventKit, and
-public-provider surfaces that a fake cannot certify.
+operator probes then verify the installed Slack, Claude/Codex, EventKit, menu
+bar, and public-provider surfaces that a fake cannot certify.
 
 Do not call a capability live merely because its module exists. The expected
 chain is: **production wiring → deterministic test → acceptance test → live
@@ -21,12 +21,18 @@ Run from the repository root:
 .venv/bin/python -m iris.irisctl verify-online
 ```
 
-`verify-online` succeeds only for a recent Socket Mode heartbeat from a live
-process. To restart the launchd job:
+`verify-online` succeeds only for a recent Socket Mode heartbeat whose recorded
+PID is still alive. This is the same process/freshness verdict used by the menu
+bar. To restart the launchd job:
 
 ```sh
 .venv/bin/python -m iris.irisctl restart
 ```
+
+A restart means “ask launchd to restart”; it is not itself proof of readiness.
+After installation, `scripts/install.sh` waits for `verify-online` before
+reporting success. After a manual restart, run `verify-online` or the live menu
+bar probe before considering Iris restored.
 
 ### Emergency stop and re-arm
 
@@ -39,7 +45,8 @@ requests remain blocked until the operator explicitly re-arms from Terminal:
 ```
 
 Do not delete the marker from Slack-facing code. Terminal-only re-arm is part of
-the authority boundary.
+the authority boundary. A healthy-but-disarmed daemon is deliberately shown as
+**orange**, not green, in the menu bar.
 
 ## General agent runtime probes
 
@@ -84,8 +91,9 @@ socket/protocol/timeout cases.
 
 Production approval requests carry the exact Slack channel/thread in the child
 environment and include bounded JSON tool arguments in the human-visible
-summary. Bare `y`/`n` resolves the oldest request; `y <id>` / `n <id>` resolves
-one exact concurrent request.
+summary. Bare `y`/`n` resolves the oldest pending request **in the originating
+thread**; `y <id>` / `n <id>` resolves one exact concurrent request only when
+the decision comes from that same origin.
 
 ## Web and weather probes
 
@@ -126,18 +134,26 @@ there is no Calendar write capability.
 This verifies Keychain credentials and outbound Socket Mode connectivity. It is
 the live gate for the transport, not for model/tool behavior.
 
-## Deterministic test and structural gates
+## Deterministic test, coverage, and structural gates
 
 Run all of these before treating a branch as releasable:
 
 ```sh
-.venv/bin/python -m pytest -q
+coverage run -m pytest -q
+coverage report -m
 .venv/bin/python scripts/checks/wiring_audit.py
 .venv/bin/python scripts/checks/wiring_audit.py \
   --check-docs README.md docs/ARCHITECTURE.md docs/OPERATIONS.md
 .venv/bin/python scripts/checks/mermaid_lint.py --min 4 docs/ARCHITECTURE.md
-.venv/bin/python scripts/checks/link_check.py
+.venv/bin/python scripts/checks/link_check.py \
+  README.md docs/ARCHITECTURE.md docs/OPERATIONS.md docs/slack-setup.md
 ```
+
+Coverage is branch-aware over production `iris/` code and is enforced by the
+configuration in `pyproject.toml`; live probe wrappers are excluded because
+they are exercised on the operator Mac rather than Linux CI. Do not lower the
+coverage floor or add exclusions merely to make CI green. Missing production
+branches are a test/work queue.
 
 The acceptance suite includes a deterministic Slack workflow that drives plain
 English into `AgentActionServer`, proves no session exists while approval is
@@ -162,7 +178,7 @@ important safety invariants and asserts the suite catches the damage:
 
 ```sh
 .venv/bin/python scripts/checks/mutation_guard.py \
-  --manifest scripts/checks/mutations.yaml --assert-min 14
+  --manifest scripts/checks/mutations.yaml --assert-min 19
 ```
 
 Run it after broad changes to approval, launch, grammar, memory, Slack, or
@@ -184,18 +200,41 @@ transport.
 
 ## Menu bar indicator
 
-`scripts/install.sh` installs the optional SwiftBar plugin
-`scripts/menubar/iris.30s.sh`. It reads only `~/.iris/runtime.json` and reports
-health. SwiftBar refreshes every 30 seconds; the daemon heartbeat is 20 seconds.
+`scripts/install.sh` installs the SwiftBar control-plane plugin
+`scripts/menubar/iris.30s.sh` from the **same checkout that launches the daemon**.
+The installer then waits until `irisctl verify-online` observes a fresh Socket
+Mode heartbeat from a live PID; if readiness never arrives it exits non-zero and
+prints the recent launchd error log instead of claiming success.
+
+The plugin is read-only. It reads only `~/.iris/runtime.json` plus the presence
+of `~/.iris/disarmed`; it does not read messages, session prompts, memory,
+credentials, audit records, or senses. SwiftBar refreshes every 30 seconds; the
+daemon heartbeat is 20 seconds.
 
 | Indicator | Meaning |
 | --- | --- |
-| Green | Connected and equivalent to `irisctl verify-online` success. |
-| Orange | Starting, stale heartbeat, or unreadable runtime record. |
+| Green | Socket Mode is connected, heartbeat is fresh, recorded PID is alive, and action control is armed. |
+| Orange | Starting, stale/unreadable runtime state, or daemon is healthy but persistently disarmed. |
 | Red | Recorded offline or recorded process is gone. |
-| Gray | No runtime record exists. |
+| Gray | No runtime record exists yet. A disarm marker is still surfaced in the dropdown if present. |
 
-The indicator is read-only and does not approve, stop, or re-arm Iris.
+The indicator never approves, stops, or re-arms Iris. The **Restart Iris** menu
+action only asks launchd to restart the process; terminal-only `irisctl rearm`
+remains the only supported way to restore consequential authority after `stop`.
+
+The deterministic tests exercise every rendered health/control state, the
+install/remove copy contract, stale-plugin replacement, fallback JSON parsing,
+and parity with the runtime health threshold. To certify the actual operator Mac
+and installed SwiftBar copy, run:
+
+```sh
+bash scripts/checks/live_menubar.sh
+```
+
+That live probe requires macOS and SwiftBar. It verifies the launchd job is
+loaded, `verify-online` succeeds, the installed plugin is byte-for-byte current
+with this checkout, the rendered color agrees with armed/disarmed state, and the
+SwiftBar process can be opened. A stale installed plugin is a failed live gate.
 
 ## State locations
 
@@ -225,11 +264,13 @@ memory commands, the Calendar operator sync, and `irisctl` controls.
 | Symptom | Check | Safe response |
 | --- | --- | --- |
 | Iris is not online | `irisctl status`; inspect `~/.iris/launchd.err.log` | Restart and verify network/login state. |
+| Menu bar is orange while Slack is connected | Check `~/.iris/disarmed` and heartbeat age | Re-arm only from Terminal if the stop was intentional to clear; otherwise diagnose stale runtime state. |
+| Installed menu bar looks stale after upgrade | `bash scripts/checks/live_menubar.sh` | Re-run `./scripts/install.sh`; the live probe must confirm the installed copy matches the checkout. |
 | Credential probe fails | `python -m iris.slack_probe` | Recheck Keychain entries; never paste tokens into chat. |
 | Iris ignores a DM | Confirm DM and stable Slack ID in config | Correct terminal-managed allowlist and restart. |
 | Coding action says gateway is disarmed | Check for `~/.iris/disarmed` | Re-arm only with `irisctl rearm` when intentional. |
 | Agent cannot start requested project | Run `projects` | Use a project beneath `projects_root`; ambiguous names are denied. |
-| Approval appears stuck | Inspect the approval ID in its originating thread | Reply `y <id>` or `n <id>`; timeout denies automatically. |
+| Approval appears stuck | Inspect the approval ID in its originating thread | Reply `y <id>` or `n <id>` in that thread; timeout denies automatically. |
 | Calendar sync fails | Run probe without `--sync` interactively | Grant EventKit permission if desired, then retry sync. |
 | Agent probe fails after CLI upgrade | Re-run `hook_probe` and inspect installed CLI behavior | Keep the feature draft/not releasable until live compatibility is restored. |
 
@@ -238,13 +279,14 @@ memory commands, the Calendar operator sync, and `irisctl` controls.
 ```sh
 git pull --ff-only
 .venv/bin/python -m pip install -e '.[dev]'
-.venv/bin/python -m pytest -q
+coverage run -m pytest -q
+coverage report -m
 .venv/bin/python scripts/checks/wiring_audit.py
 .venv/bin/python -m iris.agent_probe
 .venv/bin/python -m iris.hook_probe
 .venv/bin/python -m iris.slack_probe
-.venv/bin/python -m iris.irisctl restart
-.venv/bin/python -m iris.irisctl verify-online
+./scripts/install.sh
+bash scripts/checks/live_menubar.sh
 ```
 
 For approval/launcher changes also run `live_approval.sh` and
@@ -270,8 +312,11 @@ credentials and `~/.iris/` data in place. Removing the Slack user ID from
   more than one action is pending.
 - Use `stop` for a hard pause and `irisctl rearm` only after deciding to restore
   consequential authority.
+- Treat a green menu bar as a control-plane claim that must remain equivalent to
+  a fresh, live-PID `verify-online` check and armed action state.
 - Prefer read-only, revocable integrations. Every new write/action domain gets a
   narrow schema, daemon-owned validation, an explicit authority policy,
   deterministic tests, and a separate live gate.
-- Re-run live probes after upgrading `claude`, `codex`, macOS/EventKit, or Slack
-  dependencies because offline fakes cannot certify changed external contracts.
+- Re-run live probes after upgrading `claude`, `codex`, macOS/EventKit, SwiftBar,
+  or Slack dependencies because offline fakes cannot certify changed external
+  contracts.
