@@ -28,8 +28,9 @@ def main(argv=None) -> int:
         print(status if status else "Iris is not running")
         return 0 if status else 1
     if args.command == "verify-online":
-        print("Iris is online" if store.healthy() else "Iris is not online")
-        return 0 if store.healthy() else 1
+        healthy = store.healthy()
+        print("Iris is online" if healthy else "Iris is not online")
+        return 0 if healthy else 1
     if args.command == "rearm":
         (state_dir / "disarmed").unlink(missing_ok=True)
         _kickstart()
