@@ -15,14 +15,18 @@ from iris.conversation import CLAUDE_ISOLATION, CONVERSATION_MODEL, Conversation
 
 
 class ClaudeMCPAgentAdapter:
-    """Run an isolated Claude turn with only Iris-owned MCP read tools."""
+    """Run an isolated Claude turn with Iris-owned bounded MCP tools."""
 
     BASE_TOOL_NAMES = ("mcp__iris__weather", "mcp__iris__web_search", "mcp__iris__web_fetch",
                        "mcp__iris__workspace")
 
-    def __init__(self, workspace_root, senses_path, turns, context, *, run=subprocess.run, timeout=90, environ=None):
+    def __init__(self, workspace_root, senses_path, turns, context, *, action_socket=None,
+                 channel_id=None, thread_ts=None, run=subprocess.run, timeout=90, environ=None):
         self._workspace_root = str(pathlib.Path(workspace_root).resolve())
         self._senses_path = str(pathlib.Path(senses_path))
+        self._action_socket = str(action_socket) if action_socket else None
+        self._channel_id = channel_id
+        self._thread_ts = thread_ts
         self._turns, self._context = turns, context
         self._run, self._timeout = run, timeout
         self._environ = dict(os.environ if environ is None else environ)
@@ -30,19 +34,29 @@ class ClaudeMCPAgentAdapter:
     @property
     def tool_names(self) -> tuple[str, ...]:
         senses = ("mcp__iris__senses",) if pathlib.Path(self._senses_path).is_file() else ()
-        return (*self.BASE_TOOL_NAMES, *senses)
+        actions = (("mcp__iris__start_coding",)
+                   if self._action_socket and self._channel_id and self._thread_ts else ())
+        return (*self.BASE_TOOL_NAMES, *senses, *actions)
 
     def command(self) -> list[str]:
-        config = {"mcpServers": {"iris": {"command": sys.executable, "args": [
+        server_args = [
             "-m", mcp_server.__name__, "--workspace-root", self._workspace_root,
             "--senses-path", self._senses_path,
-        ]}}}
+        ]
+        if self._action_socket and self._channel_id and self._thread_ts:
+            server_args.extend([
+                "--action-socket", self._action_socket,
+                "--channel-id", self._channel_id,
+                "--thread-ts", self._thread_ts,
+            ])
+        config = {"mcpServers": {"iris": {"command": sys.executable, "args": server_args}}}
         return ["claude", "--model", CONVERSATION_MODEL, "--permission-mode", "manual",
                 "--tools", ",".join(self.tool_names), *CLAUDE_ISOLATION,
                 "--allowedTools", ",".join(self.tool_names),
                 "--mcp-config", json.dumps(config, separators=(",", ":")),
                 "--no-session-persistence", "-p", "--output-format", "json",
-                _agent_prompt(self._turns, self._context)]
+                _agent_prompt(self._turns, self._context,
+                              actions_enabled="mcp__iris__start_coding" in self.tool_names)]
 
     def next_step(self, _user_text, _results):
         try:
