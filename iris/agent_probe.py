@@ -56,10 +56,10 @@ def action_probe(adapter_factory=ClaudeMCPAgentAdapter) -> str:
         queue = ApprovalQueue(notifier=lambda _text: None)
         sessions = _ProbeSessions()
 
-        def notifier_for_context(_channel_id, _thread_ts):
+        def notifier_for_context(channel_id, thread_ts):
             def approve(_text):
-                if not queue.resolve(True):
-                    raise RuntimeError("probe approval was not pending")
+                if not queue.resolve(True, origin=(channel_id, thread_ts)):
+                    raise RuntimeError("probe approval was not pending in the expected origin")
             return approve
 
         server = AgentActionServer(
