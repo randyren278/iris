@@ -4,6 +4,7 @@ from __future__ import annotations
 from iris.grammar import IndexedCommand, Simple, TextCommand, parse
 from iris.projects import ProjectQueryError
 from iris.memory import MemoryPolicyError
+from iris.sessions import GatewayDisarmedError
 
 
 class CommandRouter:
@@ -42,8 +43,6 @@ class CommandRouter:
             sessions = self.sessions.sessions()
             return "Sessions: " + (", ".join(f"{item.id} {item.tool} {item.cwd}" for item in sessions)
                                    if sessions else "none")
-        if command.name == "link":
-            return "Remote Control links are available from the active Claude session in the next transport update."
         if command.name == "stop":
             return f"Stopped {self.sessions.stop()} session(s); gateway is disarmed. Re-arm from the terminal."
         if command.name in {"y", "n"}:
@@ -94,13 +93,18 @@ class CommandRouter:
             project = self._active_projects.get(default_key)
         if project is None:
             return "Select a project first with `cd <project>`."
-        session = self.sessions.launch(
-            command.name,
-            cwd=project,
-            prompt=command.text,
-            channel_id=channel_id,
-            thread_ts=thread_ts,
-        )
+        try:
+            session = self.sessions.launch(
+                command.name,
+                cwd=project,
+                prompt=command.text,
+                channel_id=channel_id,
+                thread_ts=thread_ts,
+            )
+        except GatewayDisarmedError as error:
+            return str(error)
+        except RuntimeError as error:
+            return f"Could not start session: {error}."
         return f"Started {session.tool} session {session.id} in {session.cwd}."
 
     def _indexed(self, command):
