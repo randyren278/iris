@@ -18,11 +18,13 @@ def test_reader_returns_only_quarantined_structured_fields(tmp_path):
         SourceItem("calendar", "e1", "2026-08-21T09:00:00Z", "Earlier"),
     ))
     rows = QuarantinedSenseReader(store)({})
+    # The quarantine reader preserves the provider/store order; it does not
+    # silently reorder source data while projecting the safe field set.
     assert rows == [
-        {"source_id": "calendar", "item_id": "e1", "starts_at": "2026-08-21T09:00:00Z",
-         "title": "Earlier", "trust": "untrusted"},
         {"source_id": "calendar", "item_id": "e2", "starts_at": "2026-08-22T10:00:00Z",
          "title": "Later", "trust": "untrusted"},
+        {"source_id": "calendar", "item_id": "e1", "starts_at": "2026-08-21T09:00:00Z",
+         "title": "Earlier", "trust": "untrusted"},
     ]
     assert all(set(row) == {"source_id", "item_id", "starts_at", "title", "trust"} for row in rows)
 
