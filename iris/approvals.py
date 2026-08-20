@@ -53,7 +53,10 @@ class ApprovalQueue:
                 self._pending.remove(request)
                 decision = request.decided
         if timed_out:
-            notify(f"Approval {request.id} timed out; denied.")
+            try:
+                notify(f"Approval {request.id} timed out; denied.")
+            except Exception:
+                pass
             return False
         return decision is True
 
@@ -83,10 +86,12 @@ class ApprovalQueue:
 class ApprovalServer:
     """One local Unix-socket endpoint used by coding-agent tool hooks."""
 
-    def __init__(self, path: pathlib.Path | str, queue: ApprovalQueue, *, timeout: float = 120.0):
+    def __init__(self, path: pathlib.Path | str, queue: ApprovalQueue, *, timeout: float = 120.0,
+                 notifier_for_context: Callable[[str, str], Callable[[str], None]] | None = None):
         self.path = pathlib.Path(path)
         self.queue = queue
         self.timeout = timeout
+        self._notifier_for_context = notifier_for_context
         self._socket: socket.socket | None = None
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
@@ -129,7 +134,17 @@ class ApprovalServer:
                 summary = payload["summary"]
                 if not isinstance(summary, str) or not summary:
                     raise ValueError("summary is required")
-                approved = self.queue.request(summary, timeout=self.timeout)
+                channel_id = payload.get("channel_id")
+                thread_ts = payload.get("thread_ts")
+                if bool(channel_id) != bool(thread_ts):
+                    raise ValueError("approval origin is incomplete")
+                notifier = None
+                if channel_id and thread_ts:
+                    if (not isinstance(channel_id, str) or not isinstance(thread_ts, str)
+                            or self._notifier_for_context is None):
+                        raise ValueError("approval origin is unavailable")
+                    notifier = self._notifier_for_context(channel_id, thread_ts)
+                approved = self.queue.request(summary, timeout=self.timeout, notifier=notifier)
             except (OSError, ValueError, json.JSONDecodeError, KeyError, TypeError):
                 approved = False
             try:
@@ -138,8 +153,11 @@ class ApprovalServer:
                 pass
 
 
-def request_approval(path: pathlib.Path | str, summary: str, *, connect_timeout: float = 1.0) -> bool:
+def request_approval(path: pathlib.Path | str, summary: str, *, channel_id: str | None = None,
+                     thread_ts: str | None = None, connect_timeout: float = 1.0) -> bool:
     """Hook-facing client. Missing/unreachable daemon always denies."""
+    if bool(channel_id) != bool(thread_ts):
+        return False
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
             client.settimeout(connect_timeout)
@@ -147,7 +165,10 @@ def request_approval(path: pathlib.Path | str, summary: str, *, connect_timeout:
             # The short timeout protects only daemon reachability. A connected
             # hook may legitimately wait through the operator approval window.
             client.settimeout(None)
-            client.sendall(json.dumps({"summary": summary}).encode() + b"\n")
+            payload = {"summary": summary}
+            if channel_id and thread_ts:
+                payload.update(channel_id=channel_id, thread_ts=thread_ts)
+            client.sendall(json.dumps(payload).encode() + b"\n")
             response = json.loads(client.makefile("r", encoding="utf-8").readline())
             return response.get("approved") is True
     except (OSError, ValueError, json.JSONDecodeError, AttributeError):
