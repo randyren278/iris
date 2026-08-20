@@ -63,7 +63,6 @@ def main():
     from iris.memory import MemoryStore
     from iris.session_transport import SessionTransport
     from iris.output import split_for_slack
-    from iris.notifications import OriginThreadNotifier
 
     config = load()
     credentials = load_credentials()
@@ -73,7 +72,7 @@ def main():
         raise RuntimeError("another Iris daemon already owns Socket Mode")
     runtime.start_heartbeat()
     client = SlackWebClient(credentials.bot_token)
-    approval_notifier = OriginThreadNotifier(client)
+
     def notify_session(channel_id, thread_ts, text):
         for chunk in split_for_slack(text):
             client.post_message(channel_id=channel_id, thread_ts=thread_ts, text=chunk)
@@ -81,22 +80,36 @@ def main():
 
     transport = SessionTransport(notify_session)
 
-    def notify_approval(text):
-        if not approval_notifier.notify(text):
-            LOG.error("approval pending before any allowlisted Slack DM: %s", text)
+    def reject_unbound_approval(_text):
+        raise RuntimeError("approval request has no Slack origin")
 
-    approvals = ApprovalQueue(notifier=notify_approval)
-    approval_server = ApprovalServer(state_dir / "approval.sock", approvals)
+    def notifier_for_approval(channel_id, thread_ts):
+        def notify(text):
+            for chunk in split_for_slack(text):
+                client.post_message(channel_id=channel_id, thread_ts=thread_ts, text=chunk)
+                runtime.outbound()
+        return notify
+
+    approvals = ApprovalQueue(notifier=reject_unbound_approval)
+    approval_server = ApprovalServer(
+        state_dir / "approval.sock",
+        approvals,
+        notifier_for_context=notifier_for_approval,
+    )
     approval_server.start()
     memory = MemoryStore(state_dir / "memory.json")
     router = CommandRouter(
         ProjectCatalog.discover(config.projects_root),
-        SessionController(SessionRegistry(state_dir / "sessions.json"),
-                          Launcher(approval_socket=approval_server.path, streaming=True),
-                          transport=transport),
+        SessionController(
+            SessionRegistry(state_dir / "sessions.json"),
+            Launcher(approval_socket=approval_server.path, streaming=True),
+            transport=transport,
+            disarm_path=state_dir / "disarmed",
+        ),
         approvals,
         memory=memory,
     )
+
     def memory_context(_key, query):
         return tuple(MemoryContext(item.claim, item.trust, item.source_ref)
                      for item in memory.retrieve(query))
@@ -108,14 +121,10 @@ def main():
         context_provider=memory_context,
     )
 
-    def handle(message):
-        approval_notifier.observe(message)
-        return route_message(message, router, conversation)
-
     gateway = SlackGateway(
         config.slack_allowlist,
         client,
-        handler=handle,
+        handler=lambda message: route_message(message, router, conversation),
         audit=AuditLog(state_dir / "audit.jsonl"),
         on_inbound=runtime.inbound,
         on_outbound=runtime.outbound,
