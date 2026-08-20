@@ -116,7 +116,10 @@ class AgentActionServer:
             f"{arguments['task']}"
         )
         notifier = self.notifier_for_context(channel_id, thread_ts)
-        if not self.approvals.request(summary, timeout=self.timeout, notifier=notifier):
+        origin = (channel_id, thread_ts)
+        if not self.approvals.request(
+            summary, timeout=self.timeout, notifier=notifier, origin=origin,
+        ):
             raise AgentActionError("operator denied the action")
         try:
             session = self.sessions.launch(
