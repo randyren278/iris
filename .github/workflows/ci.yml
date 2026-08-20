@@ -10,6 +10,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: iris-ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   deterministic:
     name: Deterministic contracts
