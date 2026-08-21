@@ -10,11 +10,14 @@ import threading
 import time
 from collections.abc import Callable
 
+ApprovalOrigin = tuple[str, str]
+
 
 @dataclasses.dataclass
 class PendingApproval:
     id: int
     summary: str
+    origin: ApprovalOrigin | None = None
     decided: bool | None = None
 
 
@@ -26,10 +29,14 @@ class ApprovalQueue:
         self._pending: list[PendingApproval] = []
         self._next_id = 1
 
-    def request(self, summary: str, *, timeout: float, notifier: Callable[[str], None] | None = None) -> bool:
+    def request(self, summary: str, *, timeout: float, notifier: Callable[[str], None] | None = None,
+                origin: ApprovalOrigin | None = None) -> bool:
+        if origin is not None and (not isinstance(origin, tuple) or len(origin) != 2
+                                   or not all(isinstance(value, str) and value for value in origin)):
+            return False
         notify = notifier or self._notifier
         with self._condition:
-            request = PendingApproval(self._next_id, summary)
+            request = PendingApproval(self._next_id, summary, origin=origin)
             self._next_id += 1
             self._pending.append(request)
             deadline = self._clock() + timeout
@@ -53,11 +60,15 @@ class ApprovalQueue:
                 self._pending.remove(request)
                 decision = request.decided
         if timed_out:
-            notify(f"Approval {request.id} timed out; denied.")
+            try:
+                notify(f"Approval {request.id} timed out; denied.")
+            except Exception:
+                pass
             return False
         return decision is True
 
-    def resolve(self, approved: bool, *, index: int | None = None) -> bool:
+    def resolve(self, approved: bool, *, index: int | None = None,
+                origin: ApprovalOrigin | None = None) -> bool:
         with self._condition:
             if not self._pending:
                 return False
@@ -67,6 +78,8 @@ class ApprovalQueue:
                 request = next((item for item in self._pending if item.id == index), None)
                 if request is None:
                     return False
+            if request.origin is not None and request.origin != origin:
+                return False
             request.decided = approved
             self._condition.notify_all()
             return True
@@ -83,10 +96,12 @@ class ApprovalQueue:
 class ApprovalServer:
     """One local Unix-socket endpoint used by coding-agent tool hooks."""
 
-    def __init__(self, path: pathlib.Path | str, queue: ApprovalQueue, *, timeout: float = 120.0):
+    def __init__(self, path: pathlib.Path | str, queue: ApprovalQueue, *, timeout: float = 120.0,
+                 notifier_for_context: Callable[[str, str], Callable[[str], None]] | None = None):
         self.path = pathlib.Path(path)
         self.queue = queue
         self.timeout = timeout
+        self._notifier_for_context = notifier_for_context
         self._socket: socket.socket | None = None
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
@@ -129,7 +144,21 @@ class ApprovalServer:
                 summary = payload["summary"]
                 if not isinstance(summary, str) or not summary:
                     raise ValueError("summary is required")
-                approved = self.queue.request(summary, timeout=self.timeout)
+                channel_id = payload.get("channel_id")
+                thread_ts = payload.get("thread_ts")
+                if bool(channel_id) != bool(thread_ts):
+                    raise ValueError("approval origin is incomplete")
+                notifier = None
+                origin = None
+                if channel_id and thread_ts:
+                    if (not isinstance(channel_id, str) or not isinstance(thread_ts, str)
+                            or self._notifier_for_context is None):
+                        raise ValueError("approval origin is unavailable")
+                    origin = (channel_id, thread_ts)
+                    notifier = self._notifier_for_context(channel_id, thread_ts)
+                approved = self.queue.request(
+                    summary, timeout=self.timeout, notifier=notifier, origin=origin,
+                )
             except (OSError, ValueError, json.JSONDecodeError, KeyError, TypeError):
                 approved = False
             try:
@@ -138,8 +167,11 @@ class ApprovalServer:
                 pass
 
 
-def request_approval(path: pathlib.Path | str, summary: str, *, connect_timeout: float = 1.0) -> bool:
+def request_approval(path: pathlib.Path | str, summary: str, *, channel_id: str | None = None,
+                     thread_ts: str | None = None, connect_timeout: float = 1.0) -> bool:
     """Hook-facing client. Missing/unreachable daemon always denies."""
+    if bool(channel_id) != bool(thread_ts):
+        return False
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
             client.settimeout(connect_timeout)
@@ -147,7 +179,10 @@ def request_approval(path: pathlib.Path | str, summary: str, *, connect_timeout:
             # The short timeout protects only daemon reachability. A connected
             # hook may legitimately wait through the operator approval window.
             client.settimeout(None)
-            client.sendall(json.dumps({"summary": summary}).encode() + b"\n")
+            payload = {"summary": summary}
+            if channel_id and thread_ts:
+                payload.update(channel_id=channel_id, thread_ts=thread_ts)
+            client.sendall(json.dumps(payload).encode() + b"\n")
             response = json.loads(client.makefile("r", encoding="utf-8").readline())
             return response.get("approved") is True
     except (OSError, ValueError, json.JSONDecodeError, AttributeError):

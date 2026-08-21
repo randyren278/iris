@@ -2,12 +2,12 @@
 
 Without isolation, every Iris DM runs the operator's hooks: raw transcripts get
 distilled and written wherever those hooks point, unrelated context is injected
-into Iris's prompt, and each turn costs extra model calls. `--tools ""` keeps
-the conversational turn tool-less; these tests keep the surrounding process
-boundary intact.
+into Iris's prompt, and each turn costs extra model calls. The retained text
+backend is tool-less; the production general agent uses only Iris's explicit MCP
+catalog. These tests keep the surrounding Claude process boundary intact.
 """
+import ast
 import pathlib
-import re
 
 import pytest
 
@@ -56,7 +56,7 @@ def test_conversation_turn_runs_on_the_pinned_model():
 
 
 def test_conversation_turn_still_has_no_tools():
-    """Isolation must not have displaced the existing tool-less invariant."""
+    """The retained text backend remains intentionally tool-less."""
     assert flag_value(conversation_command(), "--tools") == ""
     assert flag_value(conversation_command(), "--permission-mode") == "manual"
 
@@ -88,22 +88,30 @@ def test_bare_flag_is_never_used():
         assert '"--bare"' not in source.read_text(), source
 
 
-def test_isolation_guard_covers_every_claude_invocation():
-    """A future un-isolated `claude` command should fail the suite, not leak.
+def test_isolation_guard_covers_every_claude_command_literal():
+    """Every source-level Claude argv literal containing CLI flags is isolated.
 
-    Matches a list literal opening with "claude" — an actual command being
-    built — rather than every `tool == "claude"` comparison.
+    Use Python's AST instead of a raw text regex so data schemas such as
+    ``{"enum": ["claude", "codex"]}`` are not mistaken for subprocess argv.
+    A candidate must be a list whose first element is the executable name and
+    which also contains at least one CLI flag string.
     """
     offenders = []
     for source in IRIS.rglob("*.py"):
-        lines = source.read_text().splitlines()
-        for index, line in enumerate(lines):
-            if not re.search(r'\[\s*"claude"', line):
+        tree = ast.parse(source.read_text(), filename=str(source))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.List) or not node.elts:
                 continue
-            # Commands are built across several lines; read the whole statement.
-            window = "\n".join(lines[index:index + 7])
-            if "--setting-sources" not in window and "CLAUDE_ISOLATION" not in window:
-                offenders.append(f"{source.name}:{index + 1}")
+            first = node.elts[0]
+            if not isinstance(first, ast.Constant) or first.value != "claude":
+                continue
+            literal_strings = [item.value for item in node.elts
+                               if isinstance(item, ast.Constant) and isinstance(item.value, str)]
+            if not any(value.startswith("--") for value in literal_strings):
+                continue
+            rendered = ast.unparse(node)
+            if "CLAUDE_ISOLATION" not in rendered and "--setting-sources" not in rendered:
+                offenders.append(f"{source.name}:{node.lineno}")
     assert not offenders, f"un-isolated claude invocation(s): {offenders}"
 
 

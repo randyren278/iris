@@ -1,237 +1,238 @@
 # Iris architecture
 
-Iris is a local, single-operator Slack gateway. Its architecture optimizes for
-three properties: clear authority boundaries, recovery after a laptop sleeps,
-and evidence that the safety path still holds without a live Slack account.
+Iris is a local, single-operator Slack assistant. The architecture has two goals
+that must coexist: give the model enough context and tool choice to be useful,
+and keep consequential authority inside deterministic daemon-owned boundaries.
+A model decision may *request* authority; it never manufactures authority.
 
 ## Trust boundary
 
-Everything inside the dashed box is local. Nothing outside it can start an
-action, and no external content becomes trusted context by arriving.
+Everything that can mutate local state is inside the operator's Mac. Slack is a
+transport, models are reasoning engines, and retrieved content is data. None of
+those become trusted merely by arriving.
 
 ```mermaid
 flowchart LR
     subgraph external["Outside the Mac"]
-        slack["Slack<br/>private DM"]
-        api["Anthropic / OpenAI<br/>via local CLIs"]
+        slack["Slack private DM"]
+        models["Anthropic / OpenAI via local CLIs"]
+        web["Public web / weather"]
     end
 
-    subgraph local["The operator's Mac"]
-        keychain[("Login Keychain<br/>Slack tokens")]
-        daemon["iris.main<br/>launchd daemon"]
-        state[("~/.iris/ mode 0700<br/>runtime, sessions, memory, audit")]
-        quarantine["Calendar items<br/>untrusted quarantine"]
+    subgraph local["Operator Mac"]
+        keychain[("Login Keychain")]
+        daemon["iris.main daemon"]
+        approval["approval.sock"]
+        actions["agent-action.sock"]
+        state[("~/.iris private state")]
+        quarantine["senses.json untrusted quarantine"]
+        projects["projects_root"]
     end
 
-    slack -- "outbound Socket Mode only" --> daemon
-    keychain -- "read at startup" --> daemon
-    daemon -- "thread replies" --> slack
-    daemon -- "subprocess, isolated" --> api
+    slack -- "outbound Socket Mode" --> daemon
+    keychain --> daemon
+    daemon --> models
+    models --> web
     daemon <--> state
-    quarantine -. "never auto-promoted" .-> daemon
-
-    classDef untrusted stroke-dasharray: 5 5
-    class external,quarantine untrusted
+    daemon <--> quarantine
+    daemon --> approval
+    daemon --> actions
+    actions --> projects
+    daemon -- "thread replies" --> slack
 ```
 
-Iris binds no HTTP port, so there is no inbound path at all. Slack secrets come
-only from the Keychain, and a rejected sender's text is recorded as a digest.
+Iris binds no inbound HTTP port. Slack tokens are read from the login Keychain.
+Rejected senders are audited by digest rather than message body.
 
-## Runtime
+## Runtime and recovery
 
-`launchd` starts `python -m iris.main` when the operator logs in. A runtime
-supervisor owns a single instance lock and atomically updates
-`~/.iris/runtime.json`. Its heartbeat reports `online` only after the Socket
-Mode client connects; `irisctl verify-online` also rejects stale status.
+`launchd` starts `python -m iris.main`. `RuntimeSupervisor` owns a single-instance
+lock and writes `~/.iris/runtime.json`; `irisctl verify-online` rejects stale or
+o-longer-live status. Emergency stop state is separate: `stop` creates
+`~/.iris/disarmed`, and a new daemon instance starts disarmed while that marker
+exists. Only terminal command `irisctl rearm` removes it and restarts the job.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> starting: launchd starts the daemon
+    [*] --> starting: launchd starts daemon
     starting --> online: Socket Mode connected
-    online --> online: heartbeat every 20s
+    online --> online: heartbeat
     online --> offline: disconnect or error
-    offline --> starting: launchd KeepAlive restarts
+    offline --> starting: launchd KeepAlive
+    online --> disarmed: Slack stop
+    disarmed --> disarmed: daemon restart
+    disarmed --> starting: terminal irisctl rearm
     online --> [*]: clean shutdown
-
-    note right of online
-        Menu bar is green only while
-        the record is under 90s old
-        and the PID is alive
-    end note
-
-    note right of offline
-        Red. A killed daemon leaves
-        "online" on disk, so the
-        indicator also checks the PID
-    end note
 ```
 
-The transport is Slack Socket Mode. The Mac opens the connection, receives
-events, acknowledges the Socket Mode envelope, and posts thread replies through
-Slack's Web API. Iris does not bind an HTTP port.
+The persistent disarm marker matters because an in-memory boolean would silently
+re-arm after a crash or restart.
 
-## Message routing
+## Message routing and agentic action
 
-1. The Slack transport accepts only `message` events from a direct-message
-   channel. Bot, subtype, duplicate, and malformed events are ignored.
-2. The sender must be in `slack_allowlist`, a terminal-managed list of stable
-   Slack user IDs. Rejected messages are audited by digest, never body text.
-3. Recognized commands enter the deterministic command router. Unrecognized
-   text is a conversational turn instead.
+The Slack transport accepts only direct-message `message` events, rejects bots,
+subtypes, duplicates and malformed envelopes, then applies the stable Slack-ID
+allowlist. Recognized explicit commands enter the deterministic router.
+Unrecognized text becomes a general-agent turn.
 
-## General agent runtime decision
+The general agent receives a fixed MCP catalog. Read-only tools include weather,
+public web search/fetch, bounded workspace inspection, and quarantined senses
+when a store exists. In production it also receives one consequential MCP tool:
+`start_coding`.
 
-Iris uses the installed Claude CLI's documented `--print`,
-`--output-format=json`, `--mcp-config`, and `--strict-mcp-config`
-surface for the general-agent adapter. MCP tools run as an Iris-owned local
-server: the CLI can request a named tool, but it never receives a filesystem,
-network, or provider handle.  Iris validates each request and sends back one
-structured tool result or error.
-
-The adapter is isolated with `--setting-sources ""`, `--strict-mcp-config`, an
-explicit MCP-only tool list, a scrubbed Claude environment, and no session
-persistence. It does not inherit operator MCP configuration, hooks, or browser
-state. Deterministic adapter tests cover the command boundary; the optional
-agent probe separately checks the authenticated CLI against a disposable MCP
-server.
-4. Every reply is posted to the original thread.
+`start_coding` does **not** launch a process inside the model or MCP server. The
+MCP child sends a structured request across `agent-action.sock` containing only
+`tool`, `project`, `task`, and the exact Slack channel/thread supplied by the
+daemon. `AgentActionServer` validates the schema again, resolves the project
+through `ProjectCatalog`, asks for approval in that exact thread, checks the
+persistent disarm state through `SessionController`, and only then launches.
 
 ```mermaid
 flowchart TD
-    dm["Direct message arrives"] --> allow{"Sender in<br/>slack_allowlist?"}
-    allow -- no --> drop["Audit a digest<br/>never the body"]
-    allow -- yes --> parse{"parse() recognizes<br/>a command?"}
-    parse -- no --> talk["Agent turn<br/>Sonnet + read-only MCP tools"]
-    parse -- yes --> route["Command router"]
-    talk --> reply["Reply in the origin thread"]
-    route --> session["Coding session<br/>or state change"]
+    dm["Allowlisted Slack DM"] --> parse{"Explicit command?"}
+    parse -- "yes" --> router["Deterministic command router"]
+    parse -- "no" --> agent["Sonnet general agent"]
+    agent --> read{"Tool choice"}
+    read -- "read-only" --> data["Weather / web / workspace / senses"]
+    data --> agent
+    read -- "start_coding" --> action["agent-action.sock"]
+    action --> validate["Validate schema + resolve project + origin"]
+    validate --> approve{"Operator approves exact request?"}
+    approve -- "no / timeout / failure" --> denied["Denied"]
+    approve -- "yes" --> session["SessionController launch"]
+    router --> session
+    agent --> reply["Reply in original thread"]
     session --> reply
+    denied --> reply
 ```
 
-The conversation backend invokes Claude with only Iris's fixed read-only MCP
-catalog. Its prompt encourages relevant reads while explicitly denying write,
-shell, outbound-message, account, and other consequential authority. Tool
-results remain labeled untrusted data. The same prompt governs Iris's voice
-(tone-mirroring and restrained humor) and bars humor from safety-sensitive
-replies. The command router is the only path that can start a coding session.
+This gives plain English real agency without giving conversational prose direct
+shell or filesystem-write authority. Additional consequential domains must be
+added as new daemon-owned structured actions rather than by widening the model's
+raw tool permissions.
 
-## Models and isolation
+## Claude coding approvals
 
-Iris holds no API key. It shells out to the locally authenticated `claude` and
-`codex` CLIs, so usage bills to whatever those CLIs are logged into.
+Claude Code sessions use Iris's `PreToolUse` hook. Before the subprocess starts,
+`SessionController` passes the exact Slack channel/thread into the launch
+environment. The hook renders the tool name plus bounded JSON arguments and
+sends them through `approval.sock`. The server routes the notice using the
+request's origin rather than whichever conversation happened most recently.
 
-| Path | Model | Why |
-| --- | --- | --- |
-| Conversational turn | `--model sonnet` | short, bounded, and read-only |
-| Claude coding session | `--model opus` | does the actual work |
-| Codex session | unpinned | inherits `~/.codex/config.toml`, so the choice lives in one place |
-
-Every Claude subprocess also passes `--setting-sources ""` and
-`--strict-mcp-config`. This is a safety boundary, not tidiness. Without it a
-nested `claude -p` loads the operator's own settings files and runs their hooks,
-which means an unrelated hook can see raw DM content, inject unrelated context
-into Iris's prompt, and add model calls the operator never asked for. It also
-keeps an operator settings file from altering the tool-approval path that
-`--settings` installs.
-
-Those two flags suppress settings *files*; the explicit `--settings` JSON that
-carries Iris's `PreToolUse` approval hook still applies. That is not an
-assumption — `python -m iris.hook_probe` proves it against the real CLI by
-forcing a tool call and asserting the hook fired.
-
-## Coding sessions and approvals
-
-Iris launches Claude Code or Codex only inside the selected project directory.
-Claude Code sessions use manual permission mode. Before a tool call is allowed,
-the approval hook contacts a Unix-domain socket owned by Iris. The daemon
-renders the request in Slack and waits for `y` or `n`.
+Approval IDs are globally ordered. Bare `y`/`n` resolves the oldest request;
+`y <id>` / `n <id>` resolves one exact request, which is required when several
+sessions or an agent action are waiting concurrently.
 
 ```mermaid
 sequenceDiagram
     participant CC as Claude Code
     participant Hook as PreToolUse hook
-    participant Sock as Approval socket
+    participant Sock as approval.sock
     participant Iris as Iris daemon
-    participant Op as Operator in Slack
+    participant Slack as Origin Slack thread
 
-    CC->>Hook: about to call a tool
-    Hook->>Sock: request approval
-    Sock->>Iris: queue the request
-    Iris->>Op: post the summary in the thread
-    Op-->>Iris: y or n
+    CC->>Hook: tool_name + tool_input
+    Hook->>Sock: summary + channel_id + thread_ts
+    Sock->>Iris: queue exact request
+    Iris->>Slack: Approval N with arguments
+    Slack-->>Iris: y N or n N
     Iris-->>Sock: decision
-    Sock-->>Hook: approved true or false
-    Hook-->>CC: allow or block
-
-    Note over Hook,Sock: Every failure path is a denial:<br/>socket down, malformed request,<br/>timeout, or an explicit n
+    Sock-->>Hook: approved true / false
+    Hook-->>CC: allow / deny
 ```
 
-The flow fails closed: an unavailable socket, a malformed request, a timeout,
-or a denial all return `approved: false`. `stop` terminates active sessions and
-disarms the gateway; rearming is a terminal-only operation.
+Every transport failure denies: absent socket, malformed payload, partial
+origin, invalid response, notification failure, timeout, or explicit denial.
 
-### The Codex residual
+### Codex residual
 
-That approval path covers Claude Code only. Iris has no equivalent hook for
-Codex, so a Codex session's tool calls are **not** individually approved in
-Slack. The boundary there is the sandbox instead: Iris passes
-`--sandbox workspace-write` on the command line, which overrides `sandbox_mode`
-in the operator's `~/.codex/config.toml`, so a session may write inside its
-project and nowhere else. Codex also runs through `codex exec`, the
-non-interactive form; the bare interactive CLI exits with `stdin is not a
-terminal` under launchd.
+Codex is intentionally different. Iris launches `codex exec` with
+`--sandbox workspace-write` on the command line, overriding a wider sandbox
+setting in the operator config. Codex tool calls are not individually routed
+through Slack approval, and the current Claude stream transport does not make a
+Codex exec session steerable from `@<id>`. The general agent may approval-start
+a Codex session, but the authority boundary after launch is the forced sandbox.
+Do not describe Codex as per-tool approval-gated until a current CLI-compatible
+hook is implemented and live-tested.
 
-Closing this gap properly means carrying the approval socket into a Codex hook.
-Codex has a hooks system, but its tool-call hook contract is not documented in
-`codex exec --help`, so that work is a spike rather than a task. Until then,
-treat a Codex session as sandbox-bounded rather than approval-gated.
+## Models and subprocess isolation
 
-## Data and trust
-
-| Data | Location | Trust / lifecycle |
+| Path | Model | Authority |
 | --- | --- | --- |
-| Slack app and bot tokens | macOS login Keychain | never loaded from repository files, prompts, or environment variables |
-| Runtime state, sessions, audit, memory | `~/.iris/` | directory is created mode `0700`; atomic state files use mode `0600` where implemented |
-| Approved memory claims | `~/.iris/memory.json` | only explicitly confirmed `self` or `team` claims are retrievable |
-| Corrected / forgotten claims | same memory ledger | correction adds a superseding record; forgetting replaces the record with a tombstone |
-| Sense source metadata | `~/.iris/senses.json` when present | the agent can read quarantined `untrusted` records; provider ingestion remains opt-in and is not scheduled by the daemon |
-| Audit records | `~/.iris/audit.jsonl` | append-only rotation; rejected inbound text is represented only by SHA-256 digest |
+| General Slack agent | `sonnet` | fixed MCP catalog; reads plus approval-bound `start_coding` |
+| Claude coding session | `opus` | project process; each tool call passes Iris PreToolUse approval |
+| Codex exec session | operator config | forced `workspace-write` sandbox |
 
-Trusted context injected into a conversation may only be `self` or `team`
-memory. External source material is not promoted by retrieval, scoring, or
-conversation alone.
+Every Claude subprocess passes `--setting-sources ""` and
+`--strict-mcp-config`. General-agent turns additionally declare the exact MCP
+tool list and use no session persistence. This prevents operator settings,
+hooks, browser state, or unrelated MCP servers from silently becoming part of
+Iris's authority surface.
+
+## Memory and source trust
+
+Trusted conversational context can only come from explicitly confirmed `self`
+or `team` memory. `remember <claim>` creates a provenance record; correction
+adds a replacement that supersedes an active record; forgetting leaves a
+tombstone while removing the claim from retrieval.
+
+External sources stay quarantined. Calendar synchronization reads upcoming
+EventKit events into `~/.iris/senses.json` as `untrusted`. The general agent may
+inspect those rows, but ingestion cannot convert them to trusted memory or
+instructions.
+
+| Data | Location | Boundary |
+| --- | --- | --- |
+| Slack tokens | login Keychain | startup read only |
+| Runtime status | `~/.iris/runtime.json` | atomic health record |
+| Emergency stop | `~/.iris/disarmed` | persistent until terminal re-arm |
+| Sessions | `~/.iris/sessions.json` | daemon-owned registry |
+| Memory | `~/.iris/memory.json` | operator-confirmed self/team claims only |
+| Senses | `~/.iris/senses.json` | untrusted, revocable source data |
+| Audit | `~/.iris/audit.jsonl` | append-only bounded log |
+| Approval sockets | `~/.iris/*.sock` | mode `0600`, local process boundary |
+
+## Calendar sense
+
+`python -m iris.senses.calendar_probe` verifies EventKit read access. Adding
+`--sync` reads a bounded upcoming horizon and refreshes the Calendar source in
+the quarantine store. Synchronization is operator-run, not daemon-scheduled,
+and the provider exposes no Calendar write method.
 
 ## Present maturity
 
-The architecture deliberately contains future-facing seams, but the README
-only promises enabled behavior:
+The current live scope is deliberately narrower than the long-term assistant
+vision:
 
-- Memory is a local provenance-aware JSON ledger with correction and forget
-  semantics.
-- The user-model and salience modules are currently bounded scaffolding. The
-  salience engine defaults to shadow mode and sends no unsolicited messages.
-- Calendar has a macOS read-only access probe, and an existing quarantined
-  sense store is exposed to the agent read-only. Provider synchronization,
-  tasks, documents, and email remain planned integrations.
-- Capability policy is deny-by-default. A new skill can be drafted but is not
-  automatically made loadable.
+- General reasoning, bounded research, trusted-memory retrieval, Calendar
+  quarantine reads, and approval-bound coding-session starts are wired.
+- Claude coding tool calls are approval-gated; Codex is sandbox-bounded.
+- The salience engine is **not wired** and remains shadow-mode scaffolding.
+- The user model is **not wired** into production conversation or planning.
+- The outcome ledger is **not wired** to session completion or capability
+  verification.
+- Session lanes are **not wired** into production orchestration.
+- Hera memory export is **not wired** into the daemon.
+- The natural-language fallback translator is **not wired**; the production
+  general agent uses MCP plus the action bridge instead.
+- Email, tasks, document mutation, calendar writes, and general desktop control
+  are planned integrations, not current capabilities.
 
-The test suite and live acceptance checks are the source of truth for future
-scope and human acceptance gates.
+## Evidence and claim policy
 
-## Weather provider decision
+A green unit test is not enough evidence for a product claim. For each claimed
+capability Iris should maintain four layers:
 
-The first conversational capability is current weather, served by Open-Meteo's
-public forecast and geocoding APIs. Iris uses only ordinary HTTPS GET requests,
-needs no provider credential for this non-commercial local deployment, and
-must attribute each result to Open-Meteo with its observation time. The adapter
-has a fixed timeout and validates every response before a result reaches a
-Slack reply. Open-Meteo's free public tier is rate-limited and provides no
-uptime guarantee; a future commercial deployment needs its separately managed
-customer API key and an explicit operator decision.
+1. a production entry point that is actually reachable from `iris.main` or an
+   explicitly documented operator CLI;
+2. deterministic tests for schema, routing, denial, concurrency, and state;
+3. an acceptance test spanning the real local components rather than only a
+   similarly named fake;
+4. a live probe for behavior that depends on Slack, EventKit, the installed
+   Claude/Codex CLI, or an external provider.
 
-The provider response is external, untrusted data. Iris's capability broker
-reduces it to a fixed result shape; provider text can never become instructions
-or trigger a local action. Only capabilities registered as `read_only` may run
-from ordinary conversation. Proposal-only and consequential capabilities stay
-behind explicit Iris commands and the existing approval controls.
+The repository's wiring audit rejects unexplained dead modules. The master
+agency acceptance gate now covers action-server execution, MCP exposure,
+production adapter configuration, exact approval routing, persistent stop state,
+and no-self-escalation. Live probes remain separate because fake Slack or a fake
+CLI cannot prove installed dependency behavior.

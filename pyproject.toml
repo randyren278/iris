@@ -17,3 +17,21 @@ include = ["iris*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+
+[tool.coverage.run]
+branch = true
+source = ["iris"]
+omit = [
+    "iris/*_probe.py",
+    "iris/agent_probe_server.py",
+    "iris/senses/calendar_probe.py",
+]
+
+[tool.coverage.report]
+fail_under = 95
+precision = 1
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+]

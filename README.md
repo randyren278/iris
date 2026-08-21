@@ -5,7 +5,7 @@
 <h1 align="center">Iris</h1>
 
 <p align="center">
-  <em>A local-first Slack interface for a capable assistant that keeps its hands off the controls until you say so.</em>
+  <em>A local-first Slack assistant that can research autonomously and cross into action only through explicit authority.</em>
 </p>
 
 <p align="center">
@@ -22,19 +22,23 @@
   <a href="docs/OPERATIONS.md">Operations</a>
 </p>
 
-Most assistants are either a chat window or an autonomous process. Iris is
-meant to be neither. It gives you a private Slack DM to a local assistant on
-your Mac: natural conversation when you want to think, precise commands when
-you want to work, and an explicit approval boundary whenever work would become
-an action.
+Iris is a private Slack DM to an assistant running on your Mac. It can hold a
+normal conversation, perform bounded read-only research, remember explicitly
+confirmed claims, inspect quarantined local context, and orchestrate coding
+work. The general agent may decide that a coding task should be started from a
+plain-English request, but the daemon validates the exact project/task and asks
+for approval in the originating Slack thread before any process starts.
 
-Iris stays connected while you are logged in and the Mac is awake. It uses
-Slack Socket Mode, so the machine opens an outbound connection rather than
-hosting a public endpoint. Your Slack credentials live in the macOS login
-Keychain; state and audit records remain under `~/.iris/`.
+Iris stays connected while you are logged in and the Mac is awake. Slack Socket
+Mode is outbound-only, so Iris hosts no public endpoint. Slack credentials live
+in the macOS login Keychain; runtime state, memory, quarantine, approvals, and
+audit records remain under `~/.iris/`. A SwiftBar menu item is part of the
+production control plane: it surfaces daemon health and armed/disarmed state
+without reading conversation or credential data.
 
-The name is intentional: an iris controls how much light enters. Iris should
-be useful because it pays attention, not because it silently takes control.
+The name is intentional: an iris controls how much light enters. Iris should be
+powerful because it can reason across useful context while keeping authority
+explicit and inspectable.
 
 ---
 
@@ -43,76 +47,108 @@ be useful because it pays attention, not because it silently takes control.
 ```mermaid
 flowchart LR
     you["You<br/>private Slack DM"] -- "outbound Socket Mode" --> iris["Iris daemon<br/>on your Mac"]
-    iris -- "plain language" --> talk["General agent runtime<br/>bounded read-only tools"]
-    iris -- "explicit command" --> code["Coding session<br/>Claude Code or Codex"]
-    code -- "every tool call" --> gate{"Approve<br/>in Slack?"}
-    gate -- "y" --> run["Tool runs"]
-    gate -- "n, timeout,<br/>or any failure" --> deny["Denied"]
-    talk --> you
+    iris -- "plain language" --> agent["General agent<br/>bounded MCP catalog"]
+    agent -- "read-only" --> reads["Web / weather / workspace<br/>quarantined senses"]
+    agent -- "start_coding request" --> actionGate{"Approve exact<br/>request in Slack?"}
+    iris -- "explicit command" --> code["Claude Code / Codex"]
+    actionGate -- "yes" --> code
+    actionGate -- "no / timeout / failure" --> deny["Denied"]
+    code -- "Claude tool call" --> toolGate{"Approve exact<br/>tool call?"}
+    toolGate -- "yes" --> run["Tool runs"]
+    toolGate -- "no / timeout / failure" --> deny
+    iris -- "runtime + disarm marker" --> bar["SwiftBar<br/>health/control state"]
+    reads --> you
     run --> you
     deny --> you
 ```
 
-Nothing crosses from prose to action without that gate. See
-[Architecture](docs/ARCHITECTURE.md) for the trust boundary and model policy.
+Conversational prose cannot directly acquire shell, filesystem-write,
+messaging, credential, or account authority. The only consequential tool
+currently exposed to the general agent is `start_coding`, and it is mediated by
+a daemon-owned local socket plus exact Slack approval.
 
 ## What it does
 
 - **Converse and research.** A plain DM reaches the general-agent runtime with
-  short-term trusted thread context. Its fixed catalog may perform bounded,
-  attributed read-only research; it cannot turn source content into authority.
-- **Answer live weather.** Ask `what's the weather in <city>?` for a bounded,
-  read-only answer attributed to Open-Meteo. Iris never sends weather-provider
-  content into a privileged agent context or treats it as an instruction.
-- **Orchestrate coding work.** Select a project, start Claude Code or Codex,
-  see progress in the originating Slack thread, and steer a running session.
-- **Remember carefully.** Durable claims have a provenance record. Corrections
-  supersede prior claims; forgetting hides a claim from retrieval while keeping
-  an audit-preserving tombstone.
-- **Read narrowly.** The first live sense is macOS Calendar, verified today by
-  a read-only probe. The agent may read an existing quarantined `SenseStore`;
-  Calendar ingestion itself remains an operator-run, opt-in step rather than a
-  daemon schedule.
-- **Evaluate proactive help.** A shadow-mode salience engine that scores
-  explainable candidate reminders without sending them exists but is not yet
-  wired into the daemon.
-- **Require approval.** Claude Code tool calls are mediated by a local
-  approval socket. A missing daemon, timeout, malformed request, or `n` is a
-  denial. Codex sessions are bounded by a sandbox instead — see
-  [Architecture](docs/ARCHITECTURE.md).
+  short-term thread context and trusted memory retrieval. Its fixed MCP catalog
+  can perform bounded web, weather, workspace, and quarantined-sense reads.
+- **Start coding from intent.** When a plain-English request is clearly asking
+  Iris to carry out coding work, the agent can choose `claude` or `codex`, a
+  project name, and a task. The daemon resolves the project beneath
+  `projects_root`, posts the exact request to the originating Slack thread, and
+  starts nothing unless you approve it in that same origin.
+- **Use explicit coding commands.** `claude <task>` and `codex <task>` remain
+  available when you want deterministic control. Claude sessions stream output
+  back to their Slack thread and accept follow-up prompts. Codex currently runs
+  headless inside a forced `workspace-write` sandbox; its individual tool calls
+  are not Slack-approved and its running session is not steerable through the
+  Claude stream transport.
+- **See control readiness locally.** SwiftBar shows daemon/socket health and
+  persistent emergency-stop state. Green means a fresh heartbeat from a live
+  process **and** an armed action plane. Healthy-but-disarmed is orange; a dead
+  or recorded-offline daemon is red.
+- **Remember carefully.** `remember <claim>` writes an operator-confirmed
+  provenance record. Corrections supersede prior claims; forgetting hides a
+  claim from retrieval while retaining an audit-preserving tombstone.
+- **Read live Calendar context, opt-in.** EventKit access can be probed and an
+  operator can refresh upcoming events into `~/.iris/senses.json`. Those events
+  remain `untrusted` quarantine data and are never promoted to trusted memory by
+  ingestion alone.
+- **Fail closed.** General-agent coding actions, Claude tool calls, malformed
+  approval requests, missing sockets, timeouts, and explicit denials all stop
+  at the authority boundary. `stop` persists a disarmed marker across daemon
+  restarts and only `irisctl rearm` from Terminal removes it.
+- **Evaluate proactive help in shadow mode.** The salience/user-model/outcome
+  scaffolding still exists but is not yet wired into the daemon and sends no
+  unsolicited notifications.
+
+## Current agentic scope
+
+Iris is agentic for **reasoning, research, tool selection, and approval-bound
+coding-session orchestration**. It is not yet a universal action agent. Email,
+tasks, document mutation, calendar writes, general desktop control, and
+proactive scheduling remain future capabilities and must receive their own
+validated schemas, authority rules, deterministic tests, and live acceptance
+gates before they can be described as working.
 
 ## Which models it uses
 
-Iris holds no API key. It shells out to the `claude` and `codex` CLIs already
-installed and logged in on your Mac, so usage bills to those accounts.
+Iris holds no model API key. It shells out to the locally authenticated
+`claude` and `codex` CLIs, so usage bills to those accounts.
 
 | Path | Model |
 | --- | --- |
-| Conversational DM | Sonnet |
+| General Slack agent | Sonnet |
 | Claude Code session | Opus |
 | Codex session | whatever `~/.codex/config.toml` says |
 
-Every Claude subprocess runs with `--setting-sources ""`, so it loads none of
-your settings files and runs none of your hooks. That keeps DM content out of
-unrelated tooling and stops a settings file from weakening the approval path.
+Every Claude subprocess uses `--setting-sources ""` and
+`--strict-mcp-config`, so operator settings files, hooks, and unrelated MCP
+configuration cannot silently widen Iris's authority. Claude Code receives only
+Iris's explicit PreToolUse approval hook.
 
 ## What it does not do
 
-- It is not a cloud service, a public Slack app, or a multi-user admin tool.
-- It does not expose an HTTP listener or read Slack secrets from project files,
-  environment variables, prompts, or DMs.
-- It does not let plain conversational text trigger local actions.
-- It does not promote raw calendar or other external content into trusted
-  context automatically.
-- It does not run proactive notifications outside the explicit, bounded
-  salience path.
+- It is not a cloud service, public Slack app, or multi-user admin tool.
+- It does not expose an inbound HTTP listener or read Slack secrets from project
+  files, prompts, DMs, or ordinary environment configuration.
+- The general agent cannot directly write files, run arbitrary shell commands,
+  send messages, modify accounts, or access credentials.
+- Raw web, Calendar, or other external content never becomes trusted authority
+  merely because it was retrieved.
+- Calendar synchronization is operator-run rather than daemon-scheduled.
+- Codex tool calls are sandbox-bounded rather than individually Slack-approved.
+- Proactive notifications, email, tasks, document mutation, and broader desktop
+  automation are not wired yet.
 
 ## Install
 
-**Prerequisites:** macOS, Python 3.13+, a Slack workspace where you can create
-an app, and locally installed `claude` and `codex` CLIs for coding orchestration.
+**Prerequisites:** macOS, Python 3.13+, SwiftBar installed in `/Applications`, a
+Slack workspace where you can create an app, and locally installed/authenticated
+`claude` and `codex` CLIs.
 
 ```sh
+brew install --cask swiftbar
 git clone https://github.com/randyren278/iris.git
 cd iris
 python3.13 -m venv .venv
@@ -139,56 +175,72 @@ the background service:
 ```sh
 .venv/bin/python -m iris.slack_probe
 ./scripts/install.sh
-.venv/bin/python -m iris.irisctl verify-online
+bash scripts/checks/live_menubar.sh
 ```
 
 `install.sh` writes one launchd agent at
-`~/Library/LaunchAgents/com.iris.gateway.plist`, starts it, and configures a
-minimal runtime `PATH` for the local CLIs. It does not copy credentials or
-project state into the repository.
+`~/Library/LaunchAgents/com.iris.gateway.plist`, configures a minimal runtime
+`PATH` for the local CLIs, installs the **current checkout's** SwiftBar plugin,
+launches SwiftBar, starts Iris, and waits for a fresh Socket Mode heartbeat from
+a live PID before reporting success. It fails instead of claiming a complete
+production install when SwiftBar is absent or daemon readiness never arrives.
+It does not copy credentials or project state into the repository.
 
-It also installs the menu bar indicator, a read-only
-[SwiftBar](https://swiftbar.app) plugin that shows at a glance whether the
-daemon is connected. It is optional: without SwiftBar the install prints a note
-and continues. See [Operations](docs/OPERATIONS.md#menu-bar-indicator).
+The menu bar is read-only: it reads `~/.iris/runtime.json` and the presence of
+`~/.iris/disarmed`, not messages, prompts, credentials, memory, audit content,
+or senses. See [Operations](docs/OPERATIONS.md#menu-bar-indicator).
 
-For Calendar’s optional local read-only smoke test, macOS will ask for Calendar
-access the first time you run:
+For Calendar, macOS asks for EventKit access the first time you run the probe:
 
 ```sh
+# Verify read access only
 .venv/bin/python -m iris.senses.calendar_probe
+
+# Verify access and refresh the next 14 days into quarantined senses.json
+.venv/bin/python -m iris.senses.calendar_probe --sync
+
+# Optional different horizon
+.venv/bin/python -m iris.senses.calendar_probe --sync --days 30
 ```
 
-The current EventKit API requires the macOS “full access” consent category to
-read events. Iris’s probe only counts calendars; it does not write to Calendar.
+macOS currently labels the EventKit read permission as “full access”; Iris's
+provider performs reads only and exposes no Calendar write operation.
 
 ## Daily use
 
-Once the daemon is online, DM Iris in Slack. Plain language is a safe
-conversation turn. Use commands for work that changes local state or starts a
-coding session.
+Once the daemon is online, DM Iris normally. For example, “inspect the Iris
+repo and fix the failing tests” may cause the general agent to research first,
+then request an approval such as “start Claude in Iris: fix the failing tests.”
+Nothing starts until you answer the approval in its originating thread.
+
+Explicit commands remain available:
 
 | Slack message | Result |
 | --- | --- |
 | `projects` | List projects beneath `projects_root`. |
-| `cd <project>` | Select a project with safe fuzzy matching. |
+| `cd <project>` | Select a default project; a `cd` inside an existing Slack thread overrides only that thread. |
 | `claude <task>` | Start a Claude Code session in the selected project. |
-| `codex <task>` | Start a Codex session in the selected project. |
-| `sessions` | List active coding sessions. |
-| `@<id> <prompt>` | Send another prompt to a running session. |
+| `codex <task>` | Start a sandboxed Codex exec session in the selected project. |
+| `sessions` | List registered coding sessions. |
+| `@<id> <prompt>` | Send another prompt to a live streamed Claude session. |
 | `kill <id>` | Stop one session. |
-| `stop` | Stop every session and disarm the gateway. |
+| `stop` | Stop every session and persistently disarm the gateway. |
+| `remember <claim>` | Store an explicitly confirmed self/team memory with Slack provenance. |
 | `memories` | List retrievable trusted memory claims. |
 | `correct <id> <claim>` | Add a replacement claim that supersedes a prior one. |
-| `forget <id>` | Hide a claim from future retrieval. |
-| `y` / `n` | Approve or deny the oldest pending tool-call approval. |
+| `forget <id>` | Hide a claim from future retrieval while retaining its tombstone. |
+| `y` / `n` | Approve or deny the oldest pending approval in the current Slack thread. |
+| `y <id>` / `n <id>` | Resolve one exact pending approval only from its originating thread. |
 
-For a current weather question, include a city: `what's the weather in
-Manila?` Iris returns read-only current conditions with an Open-Meteo source
-and observation time. It asks for a city rather than guessing your location.
+For weather, include a city: `what's the weather in Manila?` Iris returns
+bounded current conditions and provider attribution rather than guessing your
+location.
 
-`stop` is deliberately terminal-rearm only. This prevents a Slack message from
-re-enabling control after an emergency stop.
+`stop` survives daemon restarts. Re-enable control only from Terminal:
+
+```sh
+.venv/bin/python -m iris.irisctl rearm
+```
 
 ## How the boundary works
 
@@ -200,51 +252,69 @@ Iris launchd daemon ──► allowlisted + DM-only router
       │                         │
       │ plain language          │ explicit command
       ▼                         ▼
-Claude agent turn          Claude Code / Codex session
-fixed read-only MCP tools  tool call → Slack y/n approval
-      │                         │
-      └────────── reply in original Slack thread ──────────┘
+Claude general agent        Claude Code / Codex
+read-only MCP tools              │
+      │                          ├─ Claude tool call → exact Slack approval
+      └─ start_coding ──────────►│
+             │                   └─ Codex → forced workspace-write sandbox
+             ▼
+      exact Slack approval
+             │
+             └─ daemon validates project + launches session
+
+runtime.json + disarmed marker ──► read-only SwiftBar control plane
 ```
 
-Iris never treats an unrecognized DM as a command. The conversational path may
-use only the registered read-only MCP catalog; the orchestration path is parsed
-through a restricted command grammar. See
-[Architecture](docs/ARCHITECTURE.md) for the trust, memory, and runtime model.
+The model never receives a direct process handle from the general-agent path.
+`start_coding` crosses a local Unix socket into the daemon, where project
+selection, approval, emergency-stop state, launch policy, and Slack origin are
+validated again.
 
 ## Operations and development
 
 ```sh
-# Status / online check / restart
+# Status / online check / restart / terminal-only re-arm
 .venv/bin/python -m iris.irisctl status
 .venv/bin/python -m iris.irisctl verify-online
 .venv/bin/python -m iris.irisctl restart
+.venv/bin/python -m iris.irisctl rearm
 
-# Entire deterministic test suite (no live Slack account required)
-.venv/bin/python -m pytest -q
+# Entire deterministic suite with enforced production branch coverage
+coverage run -m pytest -q
+coverage report -m
 
-# Optional live, credential-free weather-provider reachability probe
+# Structural production-wiring check
+.venv/bin/python scripts/checks/wiring_audit.py
+
+# Live provider / CLI / local-control probes
 .venv/bin/python -m iris.weather_probe
-
-# Operator-authorized live compatibility probes (no Slack workspace required)
-.venv/bin/python -m iris.agent_probe
 .venv/bin/python -m iris.web_probe
+.venv/bin/python -m iris.agent_probe
+.venv/bin/python -m iris.hook_probe
+.venv/bin/python -m iris.senses.calendar_probe
+bash scripts/checks/live_menubar.sh
 
-# Remove only Iris's launchd agent
+# Remove Iris's launchd agent and menu indicator
 ./scripts/uninstall.sh
 ```
 
-See [Operations](docs/OPERATIONS.md) for troubleshooting, state locations, and
-the safe recovery path after sleep or network loss.
+The deterministic suite proves schemas, routing, denial behavior, thread
+binding, action approvals, persistence, and fake-backed integrations. CI also
+enforces branch-aware coverage over production `iris/` modules. Live probes
+remain necessary for Slack credentials, current Claude/Codex CLI behavior,
+EventKit permissions, SwiftBar/launchd state, and real provider reachability.
+See [Operations](docs/OPERATIONS.md) for the complete verification matrix.
 
 ## Repository map
 
 ```text
-iris/                 gateway, policy, memory, senses, and runtime modules
-scripts/              launchd install / uninstall helpers, menu bar indicator
-tests/                offline unit, integration, and acceptance coverage
-docs/                 setup, architecture, and operational documentation
+iris/                 gateway, agent/action policy, memory, senses, tools, runtime
+scripts/              install/uninstall, menu bar, structural/live checks
+tests/                unit, integration, acceptance, and contract coverage
+docs/                 setup, architecture, operations, spike evidence
 ```
 
-The project is intentionally local-first. Before connecting a new provider or
-granting a new capability, write a deterministic fake-backed test and add a
-separate live acceptance gate.
+A feature is not “working” because a module exists. New capabilities should be
+claimed live only when their production entry point is wired, deterministic
+coverage exists, and any dependency that cannot be faked has a separate live
+acceptance probe.

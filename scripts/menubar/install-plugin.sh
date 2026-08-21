@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 #
-# install-plugin.sh install|remove — put the Iris menu bar indicator in front of
-# (or take it out of) SwiftBar. Called by scripts/install.sh and
-# scripts/uninstall.sh so the daemon and its indicator travel together.
+# install-plugin.sh install|remove — put the Iris menu-bar control plane in
+# front of SwiftBar (or take it out). Called by scripts/install.sh and
+# scripts/uninstall.sh so the daemon and its observable control plane travel
+# together.
 #
-# The menu bar item is optional. If SwiftBar is not installed this exits 0 with
-# a note: a missing indicator must never fail the daemon install.
+# A production `install` requires SwiftBar. Iris must not claim a complete
+# install while its primary local health/armed-state indicator is absent.
+# `remove` remains safe even if SwiftBar itself is already gone.
 #
 # SWIFTBAR_PLUGIN_DIR overrides the destination. Production never sets it; the
 # test suite does, which is how the round trip is verified without touching the
-# real plugin directory.
+# real plugin directory or requiring macOS.
 set -euo pipefail
 
 action="${1:-install}"
@@ -26,23 +28,28 @@ resolve_plugin_dir() {
   echo "${configured:-$HOME/.swiftbar-plugins}"
 }
 
-# Only consult SwiftBar itself when the caller has not redirected us.
-if [ -z "${SWIFTBAR_PLUGIN_DIR:-}" ] && [ ! -d "/Applications/SwiftBar.app" ]; then
-  echo "SwiftBar not installed — skipping the menu bar indicator."
-  echo "  brew install --cask swiftbar, then rerun ./scripts/install.sh"
-  exit 0
-fi
+[ "$action" = "install" ] || [ "$action" = "remove" ] || {
+  echo "usage: $0 install|remove" >&2
+  exit 2
+}
 
 plugin_dir="$(resolve_plugin_dir)"
 
 if [ "$action" = "remove" ]; then
   # Leave SwiftBar running: it may be hosting other plugins.
   rm -f "$plugin_dir/$plugin"
-  echo "Removed the Iris menu bar indicator from $plugin_dir."
+  echo "Removed the Iris menu bar control plane from $plugin_dir."
   exit 0
 fi
 
-[ "$action" = "install" ] || { echo "usage: $0 install|remove" >&2; exit 2; }
+# Test callers deliberately redirect the destination and therefore do not need
+# the GUI application. Production has no override and must have SwiftBar.
+if [ -z "${SWIFTBAR_PLUGIN_DIR:-}" ] && [ ! -d "/Applications/SwiftBar.app" ]; then
+  echo "SwiftBar is required for the Iris production control plane." >&2
+  echo "Install it with: brew install --cask swiftbar" >&2
+  echo "Then rerun: ./scripts/install.sh" >&2
+  exit 1
+fi
 
 mkdir -p "$plugin_dir"
 cp "$source_plugin" "$plugin_dir/$plugin"
@@ -54,8 +61,23 @@ if [ -z "${SWIFTBAR_PLUGIN_DIR:-}" ]; then
   if [ -z "$(defaults read com.ameba.SwiftBar PluginDirectory 2>/dev/null || true)" ]; then
     defaults write com.ameba.SwiftBar PluginDirectory "$plugin_dir"
   fi
-  # SwiftBar watches the plugin directory, so a running instance picks this up.
-  open -ga SwiftBar 2>/dev/null || true
+
+  open -ga SwiftBar >/dev/null 2>&1 || {
+    echo "SwiftBar is installed but could not be launched." >&2
+    exit 1
+  }
+  running=false
+  for _attempt in 1 2 3 4 5 6 7 8 9 10; do
+    if pgrep -x SwiftBar >/dev/null 2>&1; then
+      running=true
+      break
+    fi
+    sleep 0.5
+  done
+  if [ "$running" != true ]; then
+    echo "SwiftBar did not stay running after launch; Iris control-plane install is incomplete." >&2
+    exit 1
+  fi
 fi
 
-echo "Menu bar indicator installed to $plugin_dir/$plugin."
+echo "Menu bar control plane installed to $plugin_dir/$plugin."

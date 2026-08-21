@@ -8,6 +8,7 @@ __pycache__/
 .pytest_cache/
 *.egg-info/
 .coverage
+coverage.json
 PLAN.md
 REVIEW-PLAN.md
 IRIS-MASTER-PLAN.md

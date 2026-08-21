@@ -11,9 +11,10 @@
 # The 30s in the filename = SwiftBar re-runs this every 30 seconds. The daemon
 # heartbeats every 20s, so a state change surfaces within about half a minute.
 #
-# This is a pure reader. It opens exactly one file, ~/.iris/runtime.json, which
-# carries daemon health only: no message text, no prompts, no credentials. It
-# never writes, and the one action it offers is the documented launchd restart.
+# This is a read-only control-plane view. It reads ~/.iris/runtime.json for
+# daemon/socket health and checks only the presence of ~/.iris/disarmed for the
+# persistent emergency-stop state. Neither file contains prompts, message text,
+# credentials, memory, or approval payloads. The menu never approves or re-arms.
 #
 # Everything before the first "---" is the menu-bar line; lines after it are the
 # dropdown. "| bash=... terminal=false refresh=true" runs a shell action.
@@ -23,12 +24,13 @@
 
 STATE_DIR="${IRIS_STATE_DIR:-$HOME/.iris}"
 STATUS="$STATE_DIR/runtime.json"
+DISARMED="$STATE_DIR/disarmed"
 ERRLOG="$STATE_DIR/launchd.err.log"
 LABEL="com.iris.gateway"
 
 # Must equal the max_age default of StatusStore.healthy() in iris/runtime.py, or
 # this icon and `irisctl verify-online` will disagree about the same daemon.
-# tests/test_menubar_plugin.py reads that default and asserts it matches.
+# tests/menubar/test_menubar_plugin.py reads that default and asserts it matches.
 STALE_AFTER_SECONDS=90
 
 footer() {
@@ -43,6 +45,10 @@ is_number() {
     '' | *[!0-9]*) return 1 ;;
     *) return 0 ;;
   esac
+}
+
+is_positive_pid() {
+  is_number "$1" && [ "$1" -gt 0 ]
 }
 
 # --- epoch -> "3m ago", or "never this boot" for a null/absent timestamp ---
@@ -68,6 +74,7 @@ if [ ! -f "$STATUS" ]; then
   echo "---"
   echo "IRIS · Slack gateway | size=11 color=gray"
   echo "Not running — no runtime record | color=gray"
+  [ -f "$DISARMED" ] && echo "Control: DISARMED — re-arm from Terminal | color=orange"
   footer
   exit 0
 fi
@@ -77,7 +84,14 @@ read_json() {
   if command -v jq >/dev/null 2>&1; then
     jq -r "$1 // \"\"" "$STATUS" 2>/dev/null
   else
-    python3 -c "import json; d = json.load(open('$STATUS')); v = d.get('$2'); print('' if v is None else v)" 2>/dev/null
+    python3 - "$STATUS" "$2" <<'PY' 2>/dev/null
+import json
+import sys
+path, key = sys.argv[1], sys.argv[2]
+with open(path, encoding="utf-8") as handle:
+    value = json.load(handle).get(key)
+print("" if value is None else value)
+PY
   fi
 }
 
@@ -97,11 +111,12 @@ fi
 
 # --- unreadable: a corrupt or half-written record is not a verdict either way.
 # StatusStore writes atomically, so this should only ever mean real corruption.
-if [ -z "$STATE" ] || [ -z "$AGE" ] || ! is_number "$PID"; then
+if [ -z "$STATE" ] || [ -z "$AGE" ] || ! is_positive_pid "$PID"; then
   echo "◉ | color=orange"
   echo "---"
   echo "IRIS · Slack gateway | size=11 color=gray"
   echo "runtime.json unreadable — the next heartbeat rewrites it | color=orange"
+  [ -f "$DISARMED" ] && echo "Control: DISARMED — re-arm from Terminal | color=orange"
   footer
   exit 0
 fi
@@ -129,10 +144,21 @@ else
   HEADLINE="Unrecognized state: $STATE"
 fi
 
+# A live Slack transport is not the same thing as an armed action plane. Keep
+# offline/dead process red, but never show green while emergency stop persists.
+if [ -f "$DISARMED" ] && [ "$COLOR" = "green" ]; then
+  COLOR=orange
+fi
+
 echo "◉ | color=$COLOR"
 echo "---"
 echo "IRIS · Slack gateway | size=11 color=gray"
 echo "$HEADLINE | color=$COLOR"
+if [ -f "$DISARMED" ]; then
+  echo "Control: DISARMED — re-arm from Terminal | color=orange"
+else
+  echo "Control: armed | color=green"
+fi
 [ -n "$ERR" ] && echo "Last error: $ERR | color=orange"
 echo "---"
 echo "Last message in: $(since "$INBOUND")"

@@ -33,6 +33,7 @@ def render(state_dir, *, path=None):
 
 
 def write_status(state_dir, **overrides):
+    state_dir.mkdir(parents=True, exist_ok=True)
     status = {"pid": os.getpid(), "boot_id": "cccf9c4c5607406694f8868b87d58e85",
               "state": "online", "updated_at": time.time(), "last_inbound_at": None,
               "last_outbound_at": None, "last_error": None}
@@ -52,8 +53,22 @@ def test_no_runtime_record_is_gray(tmp_path):
     assert "no runtime record" in output
 
 
+def test_no_runtime_record_still_surfaces_persistent_disarm(tmp_path):
+    (tmp_path / "disarmed").write_text("disarmed\n")
+    output = render(tmp_path)
+    assert color(output) == "gray"
+    assert "Control: DISARMED" in output
+
+
 def test_corrupt_runtime_record_is_orange_not_a_verdict(tmp_path):
     (tmp_path / "runtime.json").write_text("{not json")
+    output = render(tmp_path)
+    assert color(output) == "orange"
+    assert "unreadable" in output
+
+
+def test_nonpositive_pid_is_not_treated_as_a_live_daemon(tmp_path):
+    write_status(tmp_path, pid=0)
     output = render(tmp_path)
     assert color(output) == "orange"
     assert "unreadable" in output
@@ -64,11 +79,32 @@ def test_online_and_fresh_is_green(tmp_path):
     output = render(tmp_path)
     assert color(output) == "green"
     assert "Online" in output
+    assert "Control: armed" in output
+
+
+def test_online_but_disarmed_is_orange_and_explicit(tmp_path):
+    write_status(tmp_path)
+    (tmp_path / "disarmed").write_text("disarmed\n")
+    output = render(tmp_path)
+    assert color(output) == "orange"
+    assert "Online" in output
+    assert "Control: DISARMED — re-arm from Terminal" in output
+    # The menu may explain terminal-only re-arm, but it must not expose a menu
+    # action that performs it. Everything after the Restart item is action UI.
+    assert "rearm" not in output.lower().split("restart iris", 1)[1]
 
 
 def test_offline_is_red(tmp_path):
     write_status(tmp_path, state="offline")
     assert color(render(tmp_path)) == "red"
+
+
+def test_offline_remains_red_when_also_disarmed(tmp_path):
+    write_status(tmp_path, state="offline")
+    (tmp_path / "disarmed").write_text("disarmed\n")
+    output = render(tmp_path)
+    assert color(output) == "red"
+    assert "Control: DISARMED" in output
 
 
 def test_starting_is_orange(tmp_path):
@@ -135,21 +171,16 @@ def test_restart_action_targets_the_launchd_job(tmp_path):
     assert "param1=kickstart param2=-k" in output
 
 
-def test_reads_no_private_state():
-    """runtime.json carries health only. sessions.json holds session prompts,
-    audit.jsonl and memory.json hold conversation-derived content."""
+def test_reads_no_conversation_or_credential_state():
+    """The disarm marker is control-plane state; private conversation-derived
+    records remain entirely outside the SwiftBar process."""
     source = PLUGIN.read_text()
-    for private in ("sessions.json", "audit.jsonl", "memory.json", "config.toml"):
+    assert "disarmed" in source
+    for private in ("sessions.json", "audit.jsonl", "memory.json", "config.toml", "senses.json"):
         assert private not in source
 
 
-def test_python_fallback_renders_the_same_verdict_as_jq(tmp_path):
-    """`jq` is not guaranteed on every macOS; the fallback must agree with it."""
-    if shutil.which("jq") is None:
-        pytest.skip("jq is absent, so there is no jq rendering to compare against")
-    write_status(tmp_path, last_inbound_at=time.time() - 180, last_error="TimeoutError")
-
-    # A PATH holding only what the plugin needs, minus jq.
+def fallback_path(tmp_path):
     tools = tmp_path / "bin"
     tools.mkdir()
     for tool in ("date", "id", "python3"):
@@ -157,11 +188,24 @@ def test_python_fallback_renders_the_same_verdict_as_jq(tmp_path):
         assert resolved, f"{tool} is required to exercise the fallback"
         (tools / tool).symlink_to(resolved)
     assert shutil.which("jq", path=str(tools)) is None
+    return str(tools)
 
-    # The two renders happen moments apart, so a second boundary can tick
-    # between them. Normalize relative ages: what must agree is the parsed
-    # fields, the colors, and the structure, not the clock.
-    def stable(output):
-        return re.sub(r"\d+(?=[smhd] ago)", "N", output)
 
-    assert stable(render(tmp_path, path=str(tools))) == stable(render(tmp_path))
+def stable(output):
+    return re.sub(r"\d+(?=[smhd] ago)", "N", output)
+
+
+def test_python_fallback_renders_the_same_verdict_as_jq(tmp_path):
+    """`jq` is not guaranteed on every macOS; the fallback must agree with it."""
+    if shutil.which("jq") is None:
+        pytest.skip("jq is absent, so there is no jq rendering to compare against")
+    write_status(tmp_path, last_inbound_at=time.time() - 180, last_error="TimeoutError")
+    assert stable(render(tmp_path, path=fallback_path(tmp_path))) == stable(render(tmp_path))
+
+
+def test_python_fallback_handles_state_paths_with_quotes_and_spaces(tmp_path):
+    state_dir = tmp_path / "state with ' quote"
+    write_status(state_dir)
+    output = render(state_dir, path=fallback_path(tmp_path))
+    assert color(output) == "green"
+    assert "Online" in output

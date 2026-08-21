@@ -28,10 +28,11 @@ class IndexedCommand(Command):
     text: str = ""
 
 
-_SIMPLE = {"ls", "projects", "sessions", "link", "y", "n", "stop", "memories"}
-_TEXT = {"cd", "claude", "codex", "forget", "correct"}
+_SIMPLE = {"ls", "projects", "sessions", "y", "n", "stop", "memories"}
+_TEXT = {"cd", "claude", "codex", "remember", "forget", "correct"}
 _INDEXED = re.compile(r"^@(\d+)\s+(.+)$")
 _KILL = re.compile(r"^kill\s+(\d+)$")
+_APPROVAL = re.compile(r"^([yn])\s+(\d+)$")
 
 
 def parse(text: str) -> Command | None:
@@ -44,6 +45,9 @@ def parse(text: str) -> Command | None:
     lowered = normalized.casefold()
     if lowered in _SIMPLE:
         return Simple(lowered)
+    approval = _APPROVAL.fullmatch(lowered)
+    if approval:
+        return IndexedCommand("approval", int(approval.group(2)), approval.group(1))
     indexed = _INDEXED.fullmatch(normalized)
     if indexed:
         return IndexedCommand("session_message", int(indexed.group(1)), indexed.group(2))

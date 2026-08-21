@@ -30,7 +30,8 @@ class Launcher:
         self._hook_python = hook_python or sys.executable
         self._streaming = streaming
 
-    def launch(self, tool: str, *, cwd: pathlib.Path | str, prompt: str):
+    def launch(self, tool: str, *, cwd: pathlib.Path | str, prompt: str,
+               approval_context: tuple[str, str] | None = None):
         directory = pathlib.Path(cwd).resolve()
         if tool not in {"claude", "codex"}:
             raise ValueError("unsupported tool")
@@ -38,11 +39,18 @@ class Launcher:
             raise ValueError("launch cwd is not a directory")
         if not isinstance(prompt, str) or not prompt.strip():
             raise ValueError("prompt is required")
+        if approval_context is not None:
+            if (not isinstance(approval_context, tuple) or len(approval_context) != 2
+                    or not all(isinstance(value, str) and value for value in approval_context)):
+                raise ValueError("approval context must contain channel and thread")
         command = self._command(tool, prompt)
         environment = {key: value for key, value in self._environ.items()
                        if not key.startswith("CLAUDE")}
         if self._approval_socket:
             environment["IRIS_APPROVAL_SOCKET"] = self._approval_socket
+            if approval_context is not None:
+                environment["IRIS_APPROVAL_CHANNEL_ID"] = approval_context[0]
+                environment["IRIS_APPROVAL_THREAD_TS"] = approval_context[1]
         options = {"cwd": str(directory), "env": environment, "start_new_session": True}
         if self._streaming and tool == "claude":
             options.update(stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,

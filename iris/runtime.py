@@ -13,6 +13,22 @@ import time
 import uuid
 
 
+def _pid_is_alive(pid: int) -> bool:
+    """Return whether ``pid`` identifies a live process without signalling it."""
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # The process exists but belongs to an authority we cannot signal.
+        return True
+    except OSError:
+        return False
+    return True
+
+
 @dataclasses.dataclass(frozen=True)
 class RuntimeStatus:
     pid: int
@@ -31,9 +47,10 @@ class RuntimeStatus:
 class StatusStore:
     """Atomically replace runtime state; a partial file is never a verdict."""
 
-    def __init__(self, path: pathlib.Path | str, *, clock=time.time):
+    def __init__(self, path: pathlib.Path | str, *, clock=time.time, pid_alive=_pid_is_alive):
         self.path = pathlib.Path(path)
         self._clock = clock
+        self._pid_alive = pid_alive
         self._lock = threading.Lock()
 
     def write(self, status: RuntimeStatus) -> None:
@@ -52,7 +69,12 @@ class StatusStore:
 
     def healthy(self, *, max_age: float = 90.0) -> bool:
         status = self.read()
-        return bool(status and status.state == "online" and self._clock() - status.updated_at <= max_age)
+        return bool(
+            status
+            and status.state == "online"
+            and self._clock() - status.updated_at <= max_age
+            and self._pid_alive(status.pid)
+        )
 
 
 class SingleInstanceLock:
