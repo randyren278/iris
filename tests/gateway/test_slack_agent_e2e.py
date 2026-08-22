@@ -12,10 +12,12 @@ class Agent:
             return ToolRequest("one", "research", {"topic": "Iris"})
         return AgentReply(f"Found: {results[0].content['title']}")
 
+    def handlers(self):
+        return {"research": lambda arguments: {"title": arguments["topic"]}}
+
 
 def test_allowlisted_dm_can_receive_agent_selected_read_only_tool_answer_in_same_thread():
-    runtime = AgentRuntime({"research": lambda arguments: {"title": arguments["topic"]}})
-    conversation = GeneralAgentCoordinator(runtime, lambda *_args: Agent())
+    conversation = GeneralAgentCoordinator(AgentRuntime({}), lambda *_args: Agent())
     client = RecordingSlackClient()
     SlackGateway(["U-allowed"], client, handler=conversation.reply).handle_envelope(
         dm_envelope(text="research Iris", ts="10.2", thread_ts="10.1"))

@@ -139,8 +139,44 @@ class SlackWebClient:
 class SocketModeEventSource:
     """Outbound-only Socket Mode source; it starts no network listener."""
 
-    def __init__(self, credentials: SlackCredentials):
+    def __init__(self, credentials: SlackCredentials, *, poll_interval: float = 1.0,
+                 stall_timeout: float = 120.0, clock=time.monotonic, sleep=time.sleep):
         self.credentials = credentials
+        self.poll_interval = poll_interval
+        self.stall_timeout = stall_timeout
+        self._clock = clock
+        self._sleep = sleep
+
+    def supervise(self, client, *, stop: Callable[[], bool] | None = None,
+                  on_connected=None, on_disconnected=None) -> None:
+        """Watch the live socket so reported health is the socket's, not the process's.
+
+        slack_sdk reconnects on its own, so this only observes. It reports each
+        transition once rather than on every poll, and returns when the socket
+        has stayed down long past that internal retry, which lets launchd start
+        a clean process instead of leaving this one looping forever.
+        """
+        connected = True
+        down_since: float | None = None
+        while not stop or not stop():
+            self._sleep(self.poll_interval)
+            live = client.is_connected()
+            if live:
+                if not connected:
+                    connected, down_since = True, None
+                    LOG.info("Socket Mode reconnected")
+                    if on_connected:
+                        on_connected()
+                continue
+            if connected:
+                connected, down_since = False, self._clock()
+                LOG.warning("Socket Mode disconnected")
+                if on_disconnected:
+                    on_disconnected()
+            elif self._clock() - down_since >= self.stall_timeout:
+                LOG.error("Socket Mode down for %.0fs; exiting so launchd restarts Iris",
+                          self.stall_timeout)
+                return
 
     def run(self, handler: Callable[[dict], bool], *, stop: Callable[[], bool] | None = None,
             on_connected=None, on_disconnected=None) -> None:
@@ -176,8 +212,8 @@ class SocketModeEventSource:
                 on_disconnected(error)
             raise
         try:
-            while not stop or not stop():
-                time.sleep(0.1)
+            self.supervise(client, stop=stop, on_connected=on_connected,
+                           on_disconnected=on_disconnected)
         finally:
             client.close()
             if on_disconnected:

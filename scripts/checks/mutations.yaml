@@ -36,7 +36,7 @@ mutations:
 - id: "isolation-dropped"
   file: "iris/conversation.py"
   invariant: "Every nested Claude command suppresses operator settings/hooks."
-  find: "CLAUDE_ISOLATION = [\"--setting-sources\", \"\", \"--strict-mcp-config\"]"
+  find: "CLAUDE_ISOLATION = [\"--setting-sources\", \"\", \"--strict-mcp-config\", \"--disable-slash-commands\"]"
   replace: "CLAUDE_ISOLATION = []"
 - id: "untrusted-context-admitted"
   file: "iris/conversation.py"
@@ -93,3 +93,33 @@ mutations:
   invariant: Only direct messages drive Iris; channel and bot events are ignored.
   find: '        if message.channel_type != "im" or message.bot_id or message.subtype:'
   replace: '        if message.bot_id or message.subtype:'
+- id: agent-turn-gets-builtin-tools
+  file: iris/agent_conversation.py
+  invariant: A conversational turn's nested Claude process carries no built-in tools.
+  find: '                "--tools", "", *CLAUDE_ISOLATION,'
+  replace: '                *CLAUDE_ISOLATION,'
+- id: malformed-tool-request-dispatched
+  file: iris/agent_conversation.py
+  invariant: A tool request that fails protocol validation is answered as text, never dispatched.
+  find: "    try:\n        return ToolRequest.from_json(candidate)\n    except ProtocolError:\n        return None"
+  replace: "    try:\n        return ToolRequest.from_json(candidate)\n    except ProtocolError:\n        return ToolRequest(\"mutant\", \"workspace\", {\"path\": \".\"})"
+- id: coordinator-drops-turn-tools
+  file: iris/agent_conversation.py
+  invariant: Each turn supplies its own origin-bound tool handlers to the runtime.
+  find: '            reply = self._runtime.reply(agent, message.text, handlers=agent.handlers())'
+  replace: '            reply = self._runtime.reply(agent, message.text)'
+- id: runtime-ignores-turn-tools
+  file: iris/agent_runtime.py
+  invariant: Iris's runtime dispatches the turn's tools rather than only startup-registered ones.
+  find: '        available = {**self._handlers, **(handlers or {})}'
+  replace: '        available = dict(self._handlers)'
+- id: socket-disconnect-not-reported
+  file: iris/slack.py
+  invariant: A dropped Socket Mode connection is recorded, so reported health is the socket's and not the process's.
+  find: "                connected, down_since = False, self._clock()\n                LOG.warning(\"Socket Mode disconnected\")\n                if on_disconnected:\n                    on_disconnected()"
+  replace: "                connected, down_since = False, self._clock()\n                LOG.warning(\"Socket Mode disconnected\")"
+- id: socket-stall-never-restarts
+  file: iris/slack.py
+  invariant: A Socket Mode connection that stays down past the stall timeout ends the process so launchd restarts it.
+  find: '            elif self._clock() - down_since >= self.stall_timeout:'
+  replace: '            elif False:'

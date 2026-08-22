@@ -5,20 +5,49 @@ import json
 import os
 import pathlib
 import subprocess
-import sys
 import threading
 from collections import defaultdict, deque
 
 from iris.agent_runtime import AgentReply, AgentRuntime
-from iris import mcp_server
+from iris.mcp_server import catalog, json_safe, tool_specs
 from iris.conversation import CLAUDE_ISOLATION, CONVERSATION_MODEL, ConversationMessage, _agent_prompt
+from iris.tool_protocol import ProtocolError, ToolRequest
 
 
-class ClaudeMCPAgentAdapter:
-    """Run an isolated Claude turn with Iris-owned bounded MCP tools."""
+def _json_safe_handler(handler):
+    return lambda arguments: json_safe(handler(arguments))
 
-    BASE_TOOL_NAMES = ("mcp__iris__weather", "mcp__iris__web_search", "mcp__iris__web_fetch",
-                       "mcp__iris__workspace")
+
+def _tool_request_or_none(text: str) -> ToolRequest | None:
+    """Read a tool request out of a model turn, or decide the turn is an answer.
+
+    The model is asked for a bare JSON object, but wrapping it in a fenced code
+    block is the common near-miss, so unwrap that one case. Anything else is
+    prose and is treated as the final answer -- a malformed request must never
+    become a tool call.
+    """
+    candidate = text.strip()
+    if candidate.startswith("```"):
+        body = candidate.split("```")[1] if candidate.count("```") >= 2 else ""
+        candidate = body.split("\n", 1)[-1].strip() if body.startswith("json") else body.strip()
+    if not candidate.startswith("{"):
+        return None
+    try:
+        return ToolRequest.from_json(candidate)
+    except ProtocolError:
+        return None
+
+
+class ClaudeToolAgentAdapter:
+    """Plan one bounded turn with an isolated Claude process; Iris runs the tools.
+
+    The model never receives a tool handle. It is shown the catalog and may
+    emit a ``tool_request``, which ``AgentRuntime`` validates and dispatches to
+    Iris-owned handlers inside this process. Iris owning dispatch is what lets
+    the nested command keep ``--setting-sources ""`` and ``--tools ""``: the
+    CLI's own MCP delivery requires operator settings to be loaded, which would
+    run the operator's hooks over raw DM text.
+    """
 
     def __init__(self, workspace_root, senses_path, turns, context, *, action_socket=None,
                  channel_id=None, thread_ts=None, run=subprocess.run, timeout=90, environ=None):
@@ -30,38 +59,60 @@ class ClaudeMCPAgentAdapter:
         self._turns, self._context = turns, context
         self._run, self._timeout = run, timeout
         self._environ = dict(os.environ if environ is None else environ)
+        # One catalog per turn: it carries this thread's approval origin, and
+        # it is the same catalog the MCP server builds, so tool names, schemas,
+        # and argument validation cannot drift between the two.
+        self._tools = catalog(
+            self._workspace_root, self._senses_path,
+            action_socket=self._action_socket, channel_id=channel_id, thread_ts=thread_ts,
+        )
 
     @property
     def tool_names(self) -> tuple[str, ...]:
-        senses = ("mcp__iris__senses",) if pathlib.Path(self._senses_path).is_file() else ()
-        actions = (("mcp__iris__start_coding",)
-                   if self._action_socket and self._channel_id and self._thread_ts else ())
-        return (*self.BASE_TOOL_NAMES, *senses, *actions)
+        return tuple(self._tools)
 
-    def command(self) -> list[str]:
-        server_args = [
-            "-m", mcp_server.__name__, "--workspace-root", self._workspace_root,
-            "--senses-path", self._senses_path,
-        ]
-        if self._action_socket and self._channel_id and self._thread_ts:
-            server_args.extend([
-                "--action-socket", self._action_socket,
-                "--channel-id", self._channel_id,
-                "--thread-ts", self._thread_ts,
-            ])
-        config = {"mcpServers": {"iris": {"command": sys.executable, "args": server_args}}}
+    def handlers(self) -> dict:
+        """The tools Iris will run for this turn. Only AgentRuntime invokes them.
+
+        Results are converted to plain JSON data on the way out, because the
+        next planning turn renders them into a prompt.
+        """
+        return {name: _json_safe_handler(entry[0]) for name, entry in self._tools.items()}
+
+    def command(self, results=()) -> list[str]:
         return ["claude", "--model", CONVERSATION_MODEL, "--permission-mode", "manual",
-                "--tools", ",".join(self.tool_names), *CLAUDE_ISOLATION,
-                "--allowedTools", ",".join(self.tool_names),
-                "--mcp-config", json.dumps(config, separators=(",", ":")),
+                "--tools", "", *CLAUDE_ISOLATION,
                 "--no-session-persistence", "-p", "--output-format", "json",
-                _agent_prompt(self._turns, self._context,
-                              actions_enabled="mcp__iris__start_coding" in self.tool_names)]
+                self.prompt(results)]
 
-    def next_step(self, _user_text, _results):
+    def prompt(self, results=()) -> str:
+        catalog_text = json.dumps(tool_specs(self._tools), separators=(",", ":"), sort_keys=True)
+        observed = "\n".join(result.to_json() for result in results)
+        # Reusing a request id is refused outright, because a repeat of a
+        # consequential call must never run twice. Naming the spent ids and
+        # saying a listed result is final keeps the model from spending the
+        # turn on a retry Iris will reject.
+        spent = ", ".join(result.request_id for result in results)
+        return (
+            _agent_prompt(self._turns, self._context,
+                          actions_enabled="start_coding" in self._tools)
+            + "\n\nTools Iris will run for you:\n" + catalog_text
+            + "\n\nTo use one, reply with ONLY this JSON object and no other text:\n"
+            + '{"type":"tool_request","request_id":"<new id>",'
+              '"tool_name":"<name above>","arguments":{...}}\n'
+            + "Otherwise reply with your answer as ordinary text.\n"
+            + "Each request_id must be one you have not already used this turn"
+            + (f"; already used: {spent}.\n" if spent else ".\n")
+            + "A result below is final. Do not repeat a call that already has one -- "
+              "use it to answer, and never claim an outcome it does not show.\n\n"
+            + ("Tool results so far:\n" + observed if observed else "Tool results so far: (none)")
+        )
+
+    def next_step(self, _user_text, results):
         try:
             result = self._run(
-                self.command(), capture_output=True, text=True, timeout=self._timeout, check=False,
+                self.command(results), capture_output=True, text=True, timeout=self._timeout,
+                check=False,
                 env={key: value for key, value in self._environ.items() if not key.startswith("CLAUDE")},
             )
         except (OSError, subprocess.TimeoutExpired):
@@ -72,6 +123,9 @@ class ClaudeMCPAgentAdapter:
             text = json.loads(result.stdout).get("result", "")
         except json.JSONDecodeError:
             text = result.stdout
+        request = _tool_request_or_none(text)
+        if request is not None:
+            return request
         return AgentReply(text.strip() or "I don't have a response for that yet.")
 
 
@@ -97,7 +151,7 @@ class GeneralAgentCoordinator:
                 supplied = self._context_provider(key)
             context = tuple(item for item in supplied if item.trust in {"self", "team"})
             agent = self._agent_factory(message, tuple(turns), context)
-            reply = self._runtime.reply(agent, message.text)
+            reply = self._runtime.reply(agent, message.text, handlers=agent.handlers())
             turns.append(ConversationMessage("assistant", reply))
             while len(turns) > self._max_messages:
                 turns.popleft()

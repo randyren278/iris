@@ -10,8 +10,20 @@ def route_message(message, router, conversation):
     return router.handle(message) if parse(message.text) is not None else conversation.reply(message)
 
 
+def configure_logging():
+    """Timestamp every line and keep slack_sdk's per-session chatter out of it.
+
+    launchd appends stderr to one file forever, so an untimestamped INFO line
+    per reconnect makes a wedged transport both unreadable and unplaceable in
+    time. Warnings and errors from the SDK still come through.
+    """
+    logging.basicConfig(level=logging.INFO,
+                        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    logging.getLogger("slack_sdk.socket_mode").setLevel(logging.WARNING)
+
+
 def main():
-    logging.basicConfig(level=logging.INFO)
+    configure_logging()
     # iMessage remains an experiment; the production daemon is Slack Socket
     # Mode and therefore has no inbound HTTP listener.
     from iris.slack import SlackGateway, SlackWebClient, SocketModeEventSource
@@ -27,7 +39,7 @@ def main():
     from iris.doctor import ensure_private_state_dir
     from iris.runtime import RuntimeSupervisor
     from iris.conversation import MemoryContext
-    from iris.agent_conversation import ClaudeMCPAgentAdapter, GeneralAgentCoordinator
+    from iris.agent_conversation import ClaudeToolAgentAdapter, GeneralAgentCoordinator
     from iris.agent_runtime import AgentRuntime
     from iris.memory import MemoryStore
     from iris.session_transport import SessionTransport
@@ -92,7 +104,7 @@ def main():
 
     conversation = GeneralAgentCoordinator(
         AgentRuntime({}),
-        lambda message, turns, context: ClaudeMCPAgentAdapter(
+        lambda message, turns, context: ClaudeToolAgentAdapter(
             config.projects_root,
             state_dir / "senses.json",
             turns,

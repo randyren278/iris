@@ -33,9 +33,19 @@ class AgentRuntime:
         self._handlers = dict(handlers)
         self._max_steps = max_steps
 
-    def reply(self, agent: AgentAdapter, user_text: str) -> str:
+    def reply(self, agent: AgentAdapter, user_text: str, *,
+              handlers: Mapping[str, Callable[[dict[str, object]], object]] | None = None) -> str:
+        """Answer one turn, dispatching any tool the agent asks for.
+
+        ``handlers`` supplies the tools for this turn only. Some are bound to
+        the originating Slack thread, so they cannot be registered once at
+        startup; building them per turn keeps concurrent threads from sharing
+        an origin. Turn handlers layer over the ones registered at
+        construction and are never stored.
+        """
         if not isinstance(user_text, str) or not user_text:
             raise AgentProtocolError("user text is required")
+        available = {**self._handlers, **(handlers or {})}
         results: list[ToolResult] = []
         seen_ids: set[str] = set()
         for _step in range(self._max_steps):
@@ -49,11 +59,11 @@ class AgentRuntime:
             if message.request_id in seen_ids:
                 raise AgentProtocolError("agent reused a tool request id")
             seen_ids.add(message.request_id)
-            results.append(self._invoke(message))
+            results.append(self._invoke(message, available))
         raise AgentProtocolError("agent exceeded the tool-step limit")
 
-    def _invoke(self, request: ToolRequest) -> ToolResult:
-        handler = self._handlers.get(request.tool_name)
+    def _invoke(self, request: ToolRequest, handlers) -> ToolResult:
+        handler = handlers.get(request.tool_name)
         if handler is None:
             return ToolResult(request.request_id, error="tool is not available")
         try:

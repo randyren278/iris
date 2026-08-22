@@ -73,14 +73,24 @@ def tool_specs(tools):
     return specs
 
 
+def json_safe(result):
+    """Render a handler result as plain JSON data.
+
+    Capability-backed tools return a result object rather than a mapping.
+    Both transports -- this server and Iris's own agent runtime -- have to
+    serialize it, so the conversion lives here rather than in either one.
+    """
+    if hasattr(result, "text"):
+        return {"text": result.text, "source": result.source, "observed_at": result.observed_at}
+    return result
+
+
 def dispatch(tools, name, arguments):
     entry = tools.get(name)
     if entry is None or not isinstance(arguments, dict):
         return {"content": [{"type": "text", "text": "tool request denied"}], "isError": True}
     try:
-        result = entry[0](arguments)
-        if hasattr(result, "text"):
-            result = {"text": result.text, "source": result.source, "observed_at": result.observed_at}
+        result = json_safe(entry[0](arguments))
         envelope = {"data": result, "provenance": name, "trust": "untrusted_data"}
         return {"content": [{"type": "text", "text": json.dumps(envelope, sort_keys=True)}]}
     except AgentActionError as error:

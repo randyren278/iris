@@ -2,7 +2,7 @@ import json
 import subprocess
 from types import SimpleNamespace
 
-from iris.agent_conversation import ClaudeMCPAgentAdapter, GeneralAgentCoordinator
+from iris.agent_conversation import ClaudeToolAgentAdapter, GeneralAgentCoordinator
 from iris.agent_runtime import AgentReply
 from iris.conversation import MemoryContext
 
@@ -11,14 +11,14 @@ def test_adapter_returns_safe_unavailable_reply_on_oserror_and_timeout(tmp_path)
     for error in (OSError("missing"), subprocess.TimeoutExpired("claude", 1)):
         def run(*_args, **_kwargs):
             raise error
-        adapter = ClaudeMCPAgentAdapter(tmp_path, tmp_path / "senses.json", (), (), run=run)
+        adapter = ClaudeToolAgentAdapter(tmp_path, tmp_path / "senses.json", (), (), run=run)
         reply = adapter.next_step("hello", ())
         assert "temporarily unavailable" in reply.text
         assert "missing" not in reply.text
 
 
 def test_adapter_returns_safe_failure_on_nonzero_process(tmp_path):
-    adapter = ClaudeMCPAgentAdapter(
+    adapter = ClaudeToolAgentAdapter(
         tmp_path, tmp_path / "senses.json", (), (),
         run=lambda *_a, **_k: SimpleNamespace(returncode=7, stdout="secret", stderr="private"),
     )
@@ -26,7 +26,7 @@ def test_adapter_returns_safe_failure_on_nonzero_process(tmp_path):
 
 
 def test_adapter_accepts_plain_stdout_when_cli_output_is_not_json(tmp_path):
-    adapter = ClaudeMCPAgentAdapter(
+    adapter = ClaudeToolAgentAdapter(
         tmp_path, tmp_path / "senses.json", (), (),
         run=lambda *_a, **_k: SimpleNamespace(returncode=0, stdout=" plain response \n"),
     )
@@ -35,32 +35,29 @@ def test_adapter_accepts_plain_stdout_when_cli_output_is_not_json(tmp_path):
 
 def test_adapter_uses_empty_fallback_for_empty_or_missing_json_result(tmp_path):
     for stdout in ('{"result":"   "}', '{}'):
-        adapter = ClaudeMCPAgentAdapter(
+        adapter = ClaudeToolAgentAdapter(
             tmp_path, tmp_path / "senses.json", (), (),
             run=lambda *_a, _stdout=stdout, **_k: SimpleNamespace(returncode=0, stdout=_stdout),
         )
         assert adapter.next_step("hello", ()).text == "I don't have a response for that yet."
 
 
-def test_adapter_command_has_no_action_args_for_partial_origin(tmp_path):
-    adapter = ClaudeMCPAgentAdapter(
+def test_adapter_prompt_offers_no_action_for_partial_origin(tmp_path):
+    adapter = ClaudeToolAgentAdapter(
         tmp_path, tmp_path / "senses.json", (), (),
         action_socket=tmp_path / "action.sock", channel_id="D1",
     )
-    command = adapter.command()
-    config = json.loads(command[command.index("--mcp-config") + 1])
-    args = config["mcpServers"]["iris"]["args"]
-    assert "--action-socket" not in args
-    assert "--channel-id" not in args
-    assert "--thread-ts" not in args
+    prompt = adapter.command()[-1]
+    assert "start_coding" not in prompt
+    assert "Never claim to have performed an action" in prompt
 
 
 class RecordingRuntime:
     def __init__(self):
         self.calls = []
 
-    def reply(self, agent, text):
-        self.calls.append((agent, text))
+    def reply(self, agent, text, *, handlers=None):
+        self.calls.append((agent, text, handlers))
         return agent.next_step(text, ()).text
 
 
@@ -85,6 +82,9 @@ def test_coordinator_filters_untrusted_context_and_passes_thread_turns():
         def next_step(self, _text, _results):
             return AgentReply("reply")
 
+        def handlers(self):
+            return {}
+
     def factory(msg, turns, context):
         factory_calls.append((msg, turns, context))
         return Agent()
@@ -108,6 +108,9 @@ def test_coordinator_supports_legacy_one_argument_context_provider():
         def next_step(self, _text, _results):
             return AgentReply("ok")
 
+        def handlers(self):
+            return {}
+
     coordinator = GeneralAgentCoordinator(runtime, lambda *_args: Agent(), context_provider=legacy)
     assert coordinator.reply(message("hello", thread="2.0")) == "ok"
     assert seen == [("D1", "2.0")]
@@ -123,6 +126,9 @@ def test_coordinator_keeps_short_term_history_per_thread_and_trims_to_bound():
 
         def next_step(self, _text, _results):
             return AgentReply(self.reply)
+
+        def handlers(self):
+            return {}
 
     def factory(msg, turns, _context):
         snapshots.append((msg.reply_thread_ts, [(turn.role, turn.text) for turn in turns]))

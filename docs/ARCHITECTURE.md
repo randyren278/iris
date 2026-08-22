@@ -75,13 +75,27 @@ subtypes, duplicates and malformed envelopes, then applies the stable Slack-ID
 allowlist. Recognized explicit commands enter the deterministic router.
 Unrecognized text becomes a general-agent turn.
 
-The general agent receives a fixed MCP catalog. Read-only tools include weather,
+The general agent is shown a fixed catalog. Read-only tools include weather,
 public web search/fetch, bounded workspace inspection, and quarantined senses
-when a store exists. In production it also receives one consequential MCP tool:
+when a store exists. In production it is also shown one consequential tool:
 `start_coding`.
 
-`start_coding` does **not** launch a process inside the model or MCP server. The
-MCP child sends a structured request across `agent-action.sock` containing only
+Iris runs that catalog itself; the model never holds a tool handle. The nested
+Claude process is launched with no built-in tools and no MCP server, and plans
+in text: to use a tool it emits a `tool_request` JSON object, which
+`AgentRuntime` validates through `iris/tool_protocol.py` and dispatches to the
+Iris-owned handler in the daemon process. The handlers come from the same
+`iris/mcp_server.py` `catalog()` the stdio MCP server publishes, so names,
+schemas, and argument validation cannot drift. A request that fails validation
+is treated as ordinary answer text and never dispatched.
+
+Dispatch lives in Iris rather than in the CLI because the CLI only exposes
+MCP tools when operator settings are loaded, and loading them would run the
+operator's hooks over raw DM text. Iris-owned dispatch keeps
+`--setting-sources ""` available while the tools still work.
+
+`start_coding` does **not** launch a process inside the model. The handler
+sends a structured request across `agent-action.sock` containing only
 `tool`, `project`, `task`, and the exact Slack channel/thread supplied by the
 daemon. `AgentActionServer` validates the schema again, resolves the project
 through `ProjectCatalog`, asks for approval in that exact thread, checks the
@@ -159,15 +173,17 @@ hook is implemented and live-tested.
 
 | Path | Model | Authority |
 | --- | --- | --- |
-| General Slack agent | `sonnet` | fixed MCP catalog; reads plus approval-bound `start_coding` |
+| General Slack agent | `sonnet` | fixed Iris-run catalog; reads plus approval-bound `start_coding` |
 | Claude coding session | `opus` | project process; each tool call passes Iris PreToolUse approval |
 | Codex exec session | operator config | forced `workspace-write` sandbox |
 
-Every Claude subprocess passes `--setting-sources ""` and
-`--strict-mcp-config`. General-agent turns additionally declare the exact MCP
-tool list and use no session persistence. This prevents operator settings,
-hooks, browser state, or unrelated MCP servers from silently becoming part of
-Iris's authority surface.
+Every Claude subprocess passes `--setting-sources ""`, `--strict-mcp-config`,
+and `--disable-slash-commands`. General-agent turns additionally pass
+`--tools ""` and use no session persistence, so the process starts with an
+empty tool list and no skills. This prevents operator settings, hooks, skills,
+browser state, or unrelated MCP servers from silently becoming part of Iris's
+authority surface. The invariant is checked live: with these flags the CLI
+reports zero tools, zero slash commands, and runs no hooks.
 
 ## Memory and source trust
 

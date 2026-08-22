@@ -47,7 +47,7 @@ explicit and inspectable.
 ```mermaid
 flowchart LR
     you["You<br/>private Slack DM"] -- "outbound Socket Mode" --> iris["Iris daemon<br/>on your Mac"]
-    iris -- "plain language" --> agent["General agent<br/>bounded MCP catalog"]
+    iris -- "plain language" --> agent["General agent<br/>bounded Iris-run catalog"]
     agent -- "read-only" --> reads["Web / weather / workspace<br/>quarantined senses"]
     agent -- "start_coding request" --> actionGate{"Approve exact<br/>request in Slack?"}
     iris -- "explicit command" --> code["Claude Code / Codex"]
@@ -70,8 +70,9 @@ a daemon-owned local socket plus exact Slack approval.
 ## What it does
 
 - **Converse and research.** A plain DM reaches the general-agent runtime with
-  short-term thread context and trusted memory retrieval. Its fixed MCP catalog
-  can perform bounded web, weather, workspace, and quarantined-sense reads.
+  short-term thread context and trusted memory retrieval. Its fixed catalog,
+  which Iris runs itself rather than handing to the model, can perform bounded
+  web, weather, workspace, and quarantined-sense reads.
 - **Start coding from intent.** When a plain-English request is clearly asking
   Iris to carry out coding work, the agent can choose `claude` or `codex`, a
   project name, and a task. The daemon resolves the project beneath
@@ -122,9 +123,11 @@ Iris holds no model API key. It shells out to the locally authenticated
 | Claude Code session | Opus |
 | Codex session | whatever `~/.codex/config.toml` says |
 
-Every Claude subprocess uses `--setting-sources ""` and
-`--strict-mcp-config`, so operator settings files, hooks, and unrelated MCP
-configuration cannot silently widen Iris's authority. Claude Code receives only
+Every Claude subprocess uses `--setting-sources ""`, `--strict-mcp-config`, and
+`--disable-slash-commands`, so operator settings files, hooks, skills, and
+unrelated MCP configuration cannot silently widen Iris's authority. A
+conversational turn additionally passes `--tools ""`: it starts with no tools at
+all and can only ask Iris to run one from the catalog. Claude Code receives only
 Iris's explicit PreToolUse approval hook.
 
 ## What it does not do
@@ -253,7 +256,7 @@ Iris launchd daemon ──► allowlisted + DM-only router
       │ plain language          │ explicit command
       ▼                         ▼
 Claude general agent        Claude Code / Codex
-read-only MCP tools              │
+read-only Iris tools             │
       │                          ├─ Claude tool call → exact Slack approval
       └─ start_coding ──────────►│
              │                   └─ Codex → forced workspace-write sandbox

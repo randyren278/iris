@@ -84,4 +84,4 @@ jobs:
       - name: Deliberately break safety invariants and require the suite to catch each mutation
         run: >-
           python scripts/checks/mutation_guard.py
-          --manifest scripts/checks/mutations.yaml --assert-min 18
+          --manifest scripts/checks/mutations.yaml --assert-min 24

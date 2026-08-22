@@ -221,7 +221,7 @@ def install_fakes(monkeypatch, tmp_path):
     monkeypatch.setattr(launcher_module, "Launcher", FakeLauncher)
     monkeypatch.setattr(sessions_module, "SessionController", FakeSessionController)
     monkeypatch.setattr(session_transport_module, "SessionTransport", RecordingTransport)
-    monkeypatch.setattr(conversation_module, "ClaudeMCPAgentAdapter", RecordingAdapter)
+    monkeypatch.setattr(conversation_module, "ClaudeToolAgentAdapter", RecordingAdapter)
     monkeypatch.setattr(conversation_module, "GeneralAgentCoordinator", FakeCoordinator)
     return projects, state_dir
 

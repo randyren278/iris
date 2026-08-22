@@ -10,7 +10,8 @@ from types import SimpleNamespace
 
 from iris import agent_probe_server
 from iris.agent_actions import AgentActionServer
-from iris.agent_conversation import ClaudeMCPAgentAdapter
+from iris.agent_conversation import ClaudeToolAgentAdapter
+from iris.agent_runtime import AgentProtocolError, AgentRuntime
 from iris.approvals import ApprovalQueue
 from iris.conversation import CLAUDE_ISOLATION, CONVERSATION_MODEL, ConversationMessage
 from iris.projects import ProjectCatalog
@@ -47,8 +48,8 @@ class _ProbeSessions:
         return SimpleNamespace(id=1, tool=tool, cwd=str(kwargs["cwd"]))
 
 
-def action_probe(adapter_factory=ClaudeMCPAgentAdapter) -> str:
-    """Use the real Claude/MCP path but a fake session launcher and auto-approval."""
+def action_probe(adapter_factory=ClaudeToolAgentAdapter) -> str:
+    """Use the real planning and dispatch path with a fake launcher and auto-approval."""
     with tempfile.TemporaryDirectory(prefix="iris-agent-action-probe-", dir="/tmp") as raw_root:
         root = pathlib.Path(raw_root)
         project = root / "IrisProbe"
@@ -85,7 +86,10 @@ def action_probe(adapter_factory=ClaudeMCPAgentAdapter) -> str:
                 channel_id="D-probe",
                 thread_ts="1.0",
             )
-            adapter.next_step(prompt, ())
+            # Drive the production loop, not just the adapter: under Iris-owned
+            # dispatch the adapter only asks for a tool, and AgentRuntime is what
+            # actually runs it.
+            AgentRuntime({}).reply(adapter, prompt, handlers=adapter.handlers())
         finally:
             server.close()
         if len(sessions.calls) != 1:
@@ -93,7 +97,7 @@ def action_probe(adapter_factory=ClaudeMCPAgentAdapter) -> str:
         tool, kwargs = sessions.calls[0]
         if tool != "claude" or pathlib.Path(kwargs["cwd"]) != project.resolve() or kwargs["prompt"] != "probe only":
             raise RuntimeError("general agent action arguments did not survive validation unchanged")
-    return "Agent action probe succeeded: Claude crossed MCP into one approved daemon action."
+    return "Agent action probe succeeded: Claude crossed Iris's tool runtime into one approved daemon action."
 
 
 def _tool_names(value) -> set[str]:
@@ -112,7 +116,8 @@ def main() -> int:
     try:
         print(probe())
         print(action_probe())
-    except (OSError, RuntimeError, subprocess.TimeoutExpired, json.JSONDecodeError) as error:
+    except (AgentProtocolError, OSError, RuntimeError, subprocess.TimeoutExpired,
+            json.JSONDecodeError) as error:
         print(f"Agent runtime probe failed: {error}")
         return 1
     return 0

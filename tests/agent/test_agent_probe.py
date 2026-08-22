@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from iris.agent_actions import request_action
 from iris.agent_probe import _tool_names, action_probe, command, probe
 from iris.agent_runtime import AgentReply
+from iris.tool_protocol import ToolRequest
 
 
 def test_probe_command_uses_only_isolated_disposable_mcp_configuration():
@@ -34,16 +35,20 @@ def test_action_probe_exercises_action_socket_without_real_coding_process():
             self.channel_id = channel_id
             self.thread_ts = thread_ts
 
-        def next_step(self, _prompt, _results):
-            request_action(
-                self.action_socket,
-                "start_coding",
-                {"tool": "claude", "project": "IrisProbe", "task": "probe only"},
-                channel_id=self.channel_id,
-                thread_ts=self.thread_ts,
-            )
+        def handlers(self):
+            # Mirrors production: the adapter publishes the tool, and only
+            # AgentRuntime runs it.
+            return {"start_coding": lambda arguments: request_action(
+                self.action_socket, "start_coding", arguments,
+                channel_id=self.channel_id, thread_ts=self.thread_ts,
+            )}
+
+        def next_step(self, _prompt, results):
+            if not results:
+                return ToolRequest("probe-1", "start_coding", {
+                    "tool": "claude", "project": "IrisProbe", "task": "probe only"})
             return AgentReply("started")
 
     assert action_probe(FakeActionAdapter) == (
-        "Agent action probe succeeded: Claude crossed MCP into one approved daemon action."
+        "Agent action probe succeeded: Claude crossed Iris's tool runtime into one approved daemon action."
     )

@@ -62,15 +62,21 @@ It performs two checks:
 
 1. a disposable MCP server exposes one fixed read and one fake mutation; Claude
    must invoke both, with the mutation denied;
-2. a disposable project plus real `AgentActionServer` proves Claude can invoke
-   `start_coding` through MCP, cross the local action socket, receive approval,
-   and reach exactly one fake session launch with unchanged validated
-   arguments. No real project or coding process is modified in this second
-   check.
+2. a disposable project plus real `AgentActionServer` proves Claude can request
+   `start_coding`, that `AgentRuntime` dispatches it, and that it crosses the
+   local action socket, receives approval, and reaches exactly one fake session
+   launch with unchanged validated arguments. No real project or coding process
+   is modified in this second check.
 
-This probe is the live compatibility gate for the current plain-English
-agent→approval-bound-coding path. Re-run it after upgrading Claude or changing
-`agent_conversation.py`, `mcp_server.py`, or `agent_actions.py`.
+Check 2 is the live gate for the plain-English agent→approval-bound-coding
+path. Re-run it after upgrading Claude or changing `agent_conversation.py`,
+`agent_runtime.py`, `mcp_server.py`, or `agent_actions.py`.
+
+Check 1 covers the CLI's own MCP delivery, which Iris no longer uses for a
+conversational turn: the CLI exposes MCP tools only when operator settings are
+loaded, and Iris runs its catalog itself precisely so it can keep
+`--setting-sources ""`. Expect check 1 to fail on a current CLI. It is retained
+as the signal to watch if that delivery path is ever reconsidered.
 
 ## Claude tool-approval probes
 
@@ -211,6 +217,16 @@ of `~/.iris/disarmed`; it does not read messages, session prompts, memory,
 credentials, audit records, or senses. SwiftBar refreshes every 30 seconds; the
 daemon heartbeat is 20 seconds.
 
+Green means the Socket Mode connection itself is live, not merely that the
+process is running. The daemon polls the connection every second and records
+each up/down transition in `~/.iris/runtime.json`, so a dropped socket turns the
+indicator red within a heartbeat instead of being papered over by the next
+heartbeat. If the connection stays down for 120 seconds — long past slack-sdk's
+own reconnect retries — the daemon exits so the launchd job's `KeepAlive` starts
+a clean process with a fresh connection. Repeated restarts in
+`~/.iris/launchd.err.log` therefore mean a real transport or credential problem,
+not a wedged process.
+
 | Indicator | Meaning |
 | --- | --- |
 | Green | Socket Mode is connected, heartbeat is fresh, recorded PID is alive, and action control is armed. |
@@ -268,6 +284,7 @@ memory commands, the Calendar operator sync, and `irisctl` controls.
 | Installed menu bar looks stale after upgrade | `bash scripts/checks/live_menubar.sh` | Re-run `./scripts/install.sh`; the live probe must confirm the installed copy matches the checkout. |
 | Credential probe fails | `python -m iris.slack_probe` | Recheck Keychain entries; never paste tokens into chat. |
 | Iris ignores a DM | Confirm DM and stable Slack ID in config | Correct terminal-managed allowlist and restart. |
+| Menu bar is green but a DM gets no reply | Compare `last_inbound_at` in `irisctl status` against when you sent it; a stale timestamp means the event never arrived | Restart; the running daemon may predate the current checkout, since code changes take effect only on restart. |
 | Coding action says gateway is disarmed | Check for `~/.iris/disarmed` | Re-arm only with `irisctl rearm` when intentional. |
 | Agent cannot start requested project | Run `projects` | Use a project beneath `projects_root`; ambiguous names are denied. |
 | Approval appears stuck | Inspect the approval ID in its originating thread | Reply `y <id>` or `n <id>` in that thread; timeout denies automatically. |

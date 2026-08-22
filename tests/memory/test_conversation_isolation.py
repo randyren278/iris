@@ -116,4 +116,5 @@ def test_isolation_guard_covers_every_claude_command_literal():
 
 
 def test_isolation_constant_is_the_single_source():
-    assert CLAUDE_ISOLATION == ["--setting-sources", "", "--strict-mcp-config"]
+    assert CLAUDE_ISOLATION == ["--setting-sources", "", "--strict-mcp-config",
+                                "--disable-slash-commands"]

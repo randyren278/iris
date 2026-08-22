@@ -5,7 +5,7 @@ import sys
 AGENCY_CONTRACT = [
     "tests/agent/test_agent_actions.py",
     "tests/agent/test_agent_probe.py",
-    "tests/agent/test_claude_mcp_adapter.py",
+    "tests/agent/test_claude_tool_adapter.py",
     "tests/agent/test_mcp_server.py",
     "tests/acceptance/test_agentic_hardening.py",
     "tests/acceptance/test_agentic_slack_e2e.py",

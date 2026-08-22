@@ -32,7 +32,7 @@ CONVERSATION_MODEL = "sonnet"
 # runs their hooks, which sends raw DM transcripts wherever those hooks point
 # and injects unrelated context into Iris's prompt. Bare mode is deliberately
 # not used here: it skips keychain reads and would break subscription auth.
-CLAUDE_ISOLATION = ["--setting-sources", "", "--strict-mcp-config"]
+CLAUDE_ISOLATION = ["--setting-sources", "", "--strict-mcp-config", "--disable-slash-commands"]
 
 
 class ClaudeTextBackend:
