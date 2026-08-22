@@ -67,13 +67,16 @@ class SlackGateway:
     """Allowlist and echo inbound Slack DMs with retry de-duplication."""
 
     def __init__(self, allowed_user_ids: Iterable[str], client, *, handler=None, audit=None,
-                 on_inbound=None, on_outbound=None, splitter=split_for_slack):
+                 on_inbound=None, on_outbound=None, splitter=split_for_slack, ack=None):
         self.allowed_user_ids = frozenset(allowed_user_ids)
         self.client = client
         self.handler = handler
         self.audit = audit
         self.on_inbound = on_inbound
         self.on_outbound = on_outbound
+        # Returns the text to acknowledge this message with, or None for no
+        # acknowledgement. A slow handler otherwise leaves the thread silent.
+        self.ack = ack
         self._splitter = splitter
         self._seen_event_ids: set[str] = set()
         self._dedupe_lock = threading.Lock()
@@ -105,6 +108,7 @@ class SlackGateway:
                               channel_id=message.channel_id, thread_ts=message.reply_thread_ts)
         if self.on_inbound:
             self.on_inbound()
+        acknowledgement = self._acknowledge(message)
         try:
             response = self.handler(message) if self.handler else message.text
             chunks = (response,) if len(response) <= 3000 else self._splitter(response)
@@ -112,11 +116,43 @@ class SlackGateway:
             LOG.exception("Slack message handler failed", extra={"event_id": message.event_id})
             chunks = ("I couldn't complete that request. Please try again.",)
         for chunk in chunks:
-            self.client.post_message(channel_id=message.channel_id, text=chunk,
-                                     thread_ts=message.reply_thread_ts)
+            # The first chunk replaces the acknowledgement in place, so the
+            # thread ends up reading as one answer rather than two messages.
+            if acknowledgement is not None:
+                self._replace(acknowledgement, message, chunk)
+                acknowledgement = None
+            else:
+                self.client.post_message(channel_id=message.channel_id, text=chunk,
+                                         thread_ts=message.reply_thread_ts)
             if self.on_outbound:
                 self.on_outbound()
         return True
+
+    def _acknowledge(self, message: SlackMessage) -> str | None:
+        """Post an immediate placeholder and return its ts, or None."""
+        if self.ack is None:
+            return None
+        try:
+            text = self.ack(message)
+            if not text:
+                return None
+            timestamp = self.client.post_message(channel_id=message.channel_id, text=text,
+                                                 thread_ts=message.reply_thread_ts)
+        except Exception:
+            # An acknowledgement is a courtesy; never let it cost the answer.
+            LOG.exception("Slack acknowledgement failed", extra={"event_id": message.event_id})
+            return None
+        if self.on_outbound:
+            self.on_outbound()
+        return timestamp if isinstance(timestamp, str) and timestamp else None
+
+    def _replace(self, timestamp: str, message: SlackMessage, text: str) -> None:
+        try:
+            self.client.update_message(channel_id=message.channel_id, ts=timestamp, text=text)
+        except Exception:
+            LOG.exception("Slack acknowledgement update failed", extra={"event_id": message.event_id})
+            self.client.post_message(channel_id=message.channel_id, text=text,
+                                     thread_ts=message.reply_thread_ts)
 
     def run_forever(self, source, *, stop: Callable[[], bool] | None = None) -> None:
         source.run(self.handle_envelope, stop=stop)
@@ -132,8 +168,14 @@ class SlackWebClient:
             raise RuntimeError("slack-sdk is required; install Iris dependencies") from error
         self._client = WebClient(token=bot_token)
 
-    def post_message(self, *, channel_id: str, text: str, thread_ts: str) -> None:
-        self._client.chat_postMessage(channel=channel_id, text=text, thread_ts=thread_ts)
+    def post_message(self, *, channel_id: str, text: str, thread_ts: str) -> str | None:
+        """Post to a thread and return the new message ts, which an edit needs."""
+        response = self._client.chat_postMessage(channel=channel_id, text=text, thread_ts=thread_ts)
+        timestamp = response.get("ts") if response is not None else None
+        return timestamp if isinstance(timestamp, str) else None
+
+    def update_message(self, *, channel_id: str, ts: str, text: str) -> None:
+        self._client.chat_update(channel=channel_id, ts=ts, text=text)
 
 
 class SocketModeEventSource:

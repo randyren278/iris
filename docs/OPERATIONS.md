@@ -80,7 +80,10 @@ as the signal to watch if that delivery path is ever reconsidered.
 
 ## Claude tool-approval probes
 
-The approval hook must remain active even though Iris disables operator settings
+These probes cover per-tool-call approval, which is the `coding_autonomy = false`
+mode. Under the default `true`, a session is gated once at launch and installs no
+hook, so run these after setting the flag false in `~/.iris/config.toml`. The
+approval hook must remain active even though Iris disables operator settings
 files with `--setting-sources ""`.
 
 ```sh
@@ -259,7 +262,7 @@ mode `0700`.
 
 ```text
 ~/.iris/
-  config.toml          terminal-managed allowlist and projects_root
+  config.toml          terminal-managed allowlist, projects_root, coding_autonomy
   runtime.json         current daemon health record
   sessions.json        coding-session registry
   memory.json          provenance-aware trusted-memory ledger
@@ -287,7 +290,8 @@ memory commands, the Calendar operator sync, and `irisctl` controls.
 | Menu bar is green but a DM gets no reply | Compare `last_inbound_at` in `irisctl status` against when you sent it; a stale timestamp means the event never arrived | Restart; the running daemon may predate the current checkout, since code changes take effect only on restart. |
 | Coding action says gateway is disarmed | Check for `~/.iris/disarmed` | Re-arm only with `irisctl rearm` when intentional. |
 | Agent cannot start requested project | Run `projects` | Use a project beneath `projects_root`; ambiguous names are denied. |
-| Approval appears stuck | Inspect the approval ID in its originating thread | Reply `y <id>` or `n <id>` in that thread; timeout denies automatically. |
+| Approval appears stuck | Inspect the approval ID in its originating thread | Reply `y <id>` or `n <id>` in that thread; a coding-session start denies automatically after 10 minutes, a per-tool-call request after 2. |
+| A DM shows `thinking…` and nothing more | Compare `last_outbound_at` in `irisctl status` against when you sent it | The placeholder is edited into the answer when it arrives; a placeholder that never changes means the conversational turn failed. Inspect `~/.iris/launchd.err.log`. |
 | Calendar sync fails | Run probe without `--sync` interactively | Grant EventKit permission if desired, then retry sync. |
 | Agent probe fails after CLI upgrade | Re-run `hook_probe` and inspect installed CLI behavior | Keep the feature draft/not releasable until live compatibility is restored. |
 

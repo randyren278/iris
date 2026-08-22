@@ -23,6 +23,7 @@ class RecordingRuntime:
     def __init__(self, state_dir):
         self.state_dir = state_dir
         self.events = []
+        self.state = "starting"
         self.__class__.instances.append(self)
 
     def start(self):
@@ -40,9 +41,11 @@ class RecordingRuntime:
 
     def connected(self):
         self.events.append("connected")
+        self.state = "online"
 
     def disconnected(self, error=None):
         self.events.append(("disconnected", type(error).__name__ if error else None))
+        self.state = "offline"
 
     def close(self):
         self.events.append("close")
@@ -160,13 +163,14 @@ class FakeCoordinator:
 class RecordingSlackGateway:
     instances = []
 
-    def __init__(self, allowlist, client, *, handler, audit, on_inbound, on_outbound):
+    def __init__(self, allowlist, client, *, handler, audit, on_inbound, on_outbound, ack):
         self.allowlist = tuple(allowlist)
         self.client = client
         self.handler = handler
         self.audit = audit
         self.on_inbound = on_inbound
         self.on_outbound = on_outbound
+        self.ack = ack
         self.responses = []
         self.__class__.instances.append(self)
 
@@ -305,3 +309,35 @@ def test_main_rejects_second_daemon_owner_before_opening_clients(monkeypatch, tm
 
     assert RecordingRuntime.instances[-1].events == ["start"]
     assert RecordingClient.instances == []
+
+
+def test_main_launches_coding_sessions_with_the_configured_autonomy(monkeypatch, tmp_path):
+    reset_fakes()
+    projects, _state_dir = install_fakes(monkeypatch, tmp_path)
+
+    main_module.main()
+    assert FakeSessionController.instances[-1].launcher.kwargs["autonomous"] is True
+
+    main_module.load = lambda: Config(slack_allowlist=("U1",), projects_root=projects,
+                                      coding_autonomy=False)
+    main_module.main()
+    assert FakeSessionController.instances[-1].launcher.kwargs["autonomous"] is False
+
+
+def test_main_acknowledges_only_online_conversational_turns(monkeypatch, tmp_path):
+    reset_fakes()
+    install_fakes(monkeypatch, tmp_path)
+
+    main_module.main()
+
+    ack = RecordingSlackGateway.instances[-1].ack
+    runtime = RecordingRuntime.instances[-1]
+
+    runtime.state = "online"
+    assert ack(SimpleNamespace(text="what is the weather")) == main_module.ACK_TEXT
+    # An explicit command answers from local state, so a placeholder would only flicker.
+    assert ack(SimpleNamespace(text="projects")) is None
+    assert ack(SimpleNamespace(text="y 3")) is None
+
+    runtime.state = "offline"
+    assert ack(SimpleNamespace(text="what is the weather")) is None

@@ -15,20 +15,24 @@ from iris.conversation import CLAUDE_ISOLATION
 # choice stays in one place.
 CODING_MODEL = "opus"
 
-# Iris mediates Claude tool calls through the approval socket, but has no
-# equivalent hook for Codex, so the sandbox is the boundary instead: a Codex
+# A Claude session is gated when it starts: the operator approves the exact
+# tool, project, and task. An autonomous session then runs its own tool calls,
+# because a second gate on every call made delegated work unusable. Setting
+# ``coding_autonomy = false`` restores per-call approval through the socket.
+# Codex has no equivalent hook, so its sandbox is the boundary instead: a Codex
 # session may write inside its project and nowhere else.
 CODEX_SANDBOX = "workspace-write"
 
 
 class Launcher:
     def __init__(self, *, popen=subprocess.Popen, environ=None, approval_socket=None,
-                 hook_python=None, streaming=False):
+                 hook_python=None, streaming=False, autonomous=False):
         self._popen = popen
         self._environ = dict(os.environ if environ is None else environ)
         self._approval_socket = str(approval_socket) if approval_socket else None
         self._hook_python = hook_python or sys.executable
         self._streaming = streaming
+        self._autonomous = autonomous
 
     def launch(self, tool: str, *, cwd: pathlib.Path | str, prompt: str,
                approval_context: tuple[str, str] | None = None):
@@ -62,14 +66,20 @@ class Launcher:
             # Isolation here is a safety boundary, not tidiness: an operator
             # settings file must not be able to alter the tool-approval path
             # that --settings installs below.
-            base = ["claude", "--model", CODING_MODEL, "--permission-mode", "manual",
+            # bypassPermissions rather than `auto`: when auto mode is
+            # unavailable the CLI silently falls back to manual, and a manual
+            # --print session with no hook to answer it denies every
+            # prompt-worthy call instead of asking. Deny rules and critical-path
+            # removals are still refused in every mode, including this one.
+            mode = "bypassPermissions" if self._autonomous else "manual"
+            base = ["claude", "--model", CODING_MODEL, "--permission-mode", mode,
                     *CLAUDE_ISOLATION]
             command = [*base, "--remote-control"]
             if self._streaming:
                 command = [*base, "--input-format", "stream-json",
                            "--output-format", "stream-json", "--include-partial-messages", "--print",
                            "--verbose"]
-            if self._approval_socket:
+            if self._approval_socket and not self._autonomous:
                 hook = f"{shlex.quote(self._hook_python)} -m iris.approval_hook"
                 settings = {
                     "hooks": {"PreToolUse": [{"matcher": "*", "hooks": [{

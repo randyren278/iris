@@ -41,7 +41,10 @@ class AgentActionServer:
 
     def __init__(self, path: pathlib.Path | str, approvals, projects, sessions, *,
                  notifier_for_context: Callable[[str, str], Callable[[str], None]],
-                 timeout: float = 120.0):
+                 # This is the only approval left in an autonomous session, so
+                 # the window has to survive the operator being away from Slack.
+                 # It still denies on timeout.
+                 timeout: float = 600.0):
         self.path = pathlib.Path(path)
         self.approvals = approvals
         self.projects = projects

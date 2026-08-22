@@ -87,3 +87,37 @@ def test_streaming_claude_uses_the_required_verbose_flag(tmp_path):
     assert "--verbose" in command
     # A streaming session receives its prompt over stdin, never on argv.
     assert "inspect tests" not in command
+
+
+def test_autonomous_claude_bypasses_permissions_and_installs_no_tool_approval_hook(tmp_path):
+    calls = []
+    launcher = Launcher(
+        popen=lambda *args, **kwargs: calls.append((args, kwargs)) or Process(),
+        environ={"PATH": "x"}, approval_socket=tmp_path / "approval.sock",
+        streaming=True, autonomous=True,
+    )
+
+    launcher.launch("claude", cwd=tmp_path, prompt="fix tests",
+                    approval_context=("D-origin", "42.1"))
+
+    command = calls[0][0][0]
+    assert flag_value(command, "--permission-mode") == "bypassPermissions"
+    # An approved session runs its own tool calls: no PreToolUse hook is wired.
+    assert "--settings" not in command
+    # Isolation from the operator's own settings is not part of the trade.
+    assert flag_value(command, "--setting-sources") == ""
+    assert "--strict-mcp-config" in command
+
+
+def test_autonomy_is_opt_in_so_the_default_launcher_still_gates_every_tool_call(tmp_path):
+    calls = []
+    launcher = Launcher(
+        popen=lambda *args, **kwargs: calls.append((args, kwargs)) or Process(),
+        environ={"PATH": "x"}, approval_socket=tmp_path / "approval.sock",
+    )
+
+    launcher.launch("claude", cwd=tmp_path, prompt="fix tests")
+
+    command = calls[0][0][0]
+    assert flag_value(command, "--permission-mode") == "manual"
+    assert json.loads(flag_value(command, "--settings"))["hooks"]["PreToolUse"]

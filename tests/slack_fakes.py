@@ -13,6 +13,7 @@ class FakeEventSource:
 class RecordingSlackClient:
     def __init__(self):
         self.messages = []
+        self.updates = []
 
     def post_message(self, *, channel_id, text, thread_ts):
         self.messages.append({
@@ -20,3 +21,8 @@ class RecordingSlackClient:
             "text": text,
             "thread_ts": thread_ts,
         })
+        # The real client returns the new message ts, which an edit needs.
+        return f"posted-{len(self.messages)}"
+
+    def update_message(self, *, channel_id, ts, text):
+        self.updates.append({"channel_id": channel_id, "ts": ts, "text": text})

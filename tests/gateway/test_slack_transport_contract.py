@@ -155,8 +155,8 @@ def test_gateway_run_forever_delegates_to_source():
     assert calls == [(gateway.handle_envelope, stop)]
 
 
-def test_slack_web_client_wraps_sdk_without_leaking_interface(monkeypatch):
-    posts = []
+def install_web_sdk(monkeypatch, *, response=None):
+    posts, updates = [], []
 
     class SDKClient:
         def __init__(self, *, token):
@@ -164,13 +164,41 @@ def test_slack_web_client_wraps_sdk_without_leaking_interface(monkeypatch):
 
         def chat_postMessage(self, **kwargs):
             posts.append(kwargs)
+            return response
+
+        def chat_update(self, **kwargs):
+            updates.append(kwargs)
 
     module = types.ModuleType("slack_sdk")
     module.WebClient = SDKClient
     monkeypatch.setitem(sys.modules, "slack_sdk", module)
+    return posts, updates
+
+
+def test_slack_web_client_wraps_sdk_without_leaking_interface(monkeypatch):
+    posts, _updates = install_web_sdk(monkeypatch)
+
     client = SlackWebClient("xoxb-secret")
     client.post_message(channel_id="D1", text="reply", thread_ts="1.0")
     assert posts == [{"channel": "D1", "text": "reply", "thread_ts": "1.0"}]
+
+
+def test_slack_web_client_returns_the_posted_timestamp_and_can_edit_it(monkeypatch):
+    _posts, updates = install_web_sdk(monkeypatch, response={"ok": True, "ts": "77.1"})
+
+    client = SlackWebClient("xoxb-secret")
+    assert client.post_message(channel_id="D1", text="thinking…", thread_ts="1.0") == "77.1"
+
+    client.update_message(channel_id="D1", ts="77.1", text="the answer")
+    assert updates == [{"channel": "D1", "ts": "77.1", "text": "the answer"}]
+
+
+@pytest.mark.parametrize("response", [None, {"ok": True}, {"ts": 77.1}])
+def test_slack_web_client_reports_no_timestamp_rather_than_a_bad_one(monkeypatch, response):
+    install_web_sdk(monkeypatch, response=response)
+
+    client = SlackWebClient("xoxb-secret")
+    assert client.post_message(channel_id="D1", text="reply", thread_ts="1.0") is None
 
 
 def install_socket_sdk(monkeypatch, *, connect_error=None):

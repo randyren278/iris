@@ -27,7 +27,8 @@ normal conversation, perform bounded read-only research, remember explicitly
 confirmed claims, inspect quarantined local context, and orchestrate coding
 work. The general agent may decide that a coding task should be started from a
 plain-English request, but the daemon validates the exact project/task and asks
-for approval in the originating Slack thread before any process starts.
+for approval in the originating Slack thread before any process starts. Once
+you approve that start, the session runs its own tool calls to completion.
 
 Iris stays connected while you are logged in and the Mac is awake. Slack Socket
 Mode is outbound-only, so Iris hosts no public endpoint. Slack credentials live
@@ -53,9 +54,7 @@ flowchart LR
     iris -- "explicit command" --> code["Claude Code / Codex"]
     actionGate -- "yes" --> code
     actionGate -- "no / timeout / failure" --> deny["Denied"]
-    code -- "Claude tool call" --> toolGate{"Approve exact<br/>tool call?"}
-    toolGate -- "yes" --> run["Tool runs"]
-    toolGate -- "no / timeout / failure" --> deny
+    code -- "approved session" --> run["Session runs its own tools"]
     iris -- "runtime + disarm marker" --> bar["SwiftBar<br/>health/control state"]
     reads --> you
     run --> you
@@ -95,10 +94,11 @@ a daemon-owned local socket plus exact Slack approval.
   operator can refresh upcoming events into `~/.iris/senses.json`. Those events
   remain `untrusted` quarantine data and are never promoted to trusted memory by
   ingestion alone.
-- **Fail closed.** General-agent coding actions, Claude tool calls, malformed
-  approval requests, missing sockets, timeouts, and explicit denials all stop
-  at the authority boundary. `stop` persists a disarmed marker across daemon
-  restarts and only `irisctl rearm` from Terminal removes it.
+- **Fail closed.** General-agent coding actions, malformed approval requests,
+  missing sockets, timeouts, and explicit denials all stop at the authority
+  boundary. `stop` persists a disarmed marker across daemon restarts and only
+  `irisctl rearm` from Terminal removes it. Setting `coding_autonomy = false`
+  puts every Claude tool call behind the same gate as well.
 - **Evaluate proactive help in shadow mode.** The salience/user-model/outcome
   scaffolding still exists but is not yet wired into the daemon and sends no
   unsolicited notifications.
@@ -127,8 +127,9 @@ Every Claude subprocess uses `--setting-sources ""`, `--strict-mcp-config`, and
 `--disable-slash-commands`, so operator settings files, hooks, skills, and
 unrelated MCP configuration cannot silently widen Iris's authority. A
 conversational turn additionally passes `--tools ""`: it starts with no tools at
-all and can only ask Iris to run one from the catalog. Claude Code receives only
-Iris's explicit PreToolUse approval hook.
+all and can only ask Iris to run one from the catalog. A Claude Code session is
+gated when it starts and then runs unattended; with `coding_autonomy = false` it
+instead receives Iris's explicit PreToolUse approval hook and nothing else.
 
 ## What it does not do
 
@@ -167,6 +168,9 @@ Then create terminal-managed Iris configuration:
 # ~/.iris/config.toml
 slack_allowlist = ["YOUR_SLACK_USER_ID"]
 projects_root = "/Users/you/Developer"
+# Optional. false puts every tool call inside a coding session back behind a
+# Slack approval; the default true asks only once, when the session starts.
+coding_autonomy = true
 ```
 
 The allowlist contains stable Slack user IDs, never a display name or email.

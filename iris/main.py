@@ -4,10 +4,24 @@ import logging
 from iris.config import load
 from iris.grammar import parse
 
+ACK_TEXT = "thinking…"
+
 
 def route_message(message, router, conversation):
     """Keep explicit commands ahead of every conversational capability."""
     return router.handle(message) if parse(message.text) is not None else conversation.reply(message)
+
+
+def acknowledgement(message, runtime):
+    """Acknowledge only the turns that are both slow and expected to land.
+
+    An explicit command answers from local state immediately, so a placeholder
+    would only flicker. A conversational turn shells out to a model and takes
+    seconds. Offline means Iris cannot promise an answer, so it promises none.
+    """
+    if runtime.state != "online" or parse(message.text) is not None:
+        return None
+    return ACK_TEXT
 
 
 def configure_logging():
@@ -82,7 +96,8 @@ def main():
     projects = ProjectCatalog.discover(config.projects_root)
     sessions = SessionController(
         SessionRegistry(state_dir / "sessions.json"),
-        Launcher(approval_socket=approval_server.path, streaming=True),
+        Launcher(approval_socket=approval_server.path, streaming=True,
+                 autonomous=config.coding_autonomy),
         transport=transport,
         disarm_path=state_dir / "disarmed",
     )
@@ -123,6 +138,7 @@ def main():
         audit=AuditLog(state_dir / "audit.jsonl"),
         on_inbound=runtime.inbound,
         on_outbound=runtime.outbound,
+        ack=lambda message: acknowledgement(message, runtime),
     )
     source = SocketModeEventSource(credentials)
     try:

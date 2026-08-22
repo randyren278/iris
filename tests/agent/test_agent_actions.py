@@ -151,7 +151,7 @@ def make_direct_server(tmp_path, *, sessions=None, approval=True):
     class Approvals:
         def request(self, summary, *, timeout, notifier, origin=None):
             assert "Iris" in summary
-            assert timeout == 120.0
+            assert timeout == 600.0
             assert callable(notifier)
             assert origin == ("D1", "1.0")
             return approval
@@ -247,3 +247,12 @@ def test_request_action_fails_closed_on_invalid_and_denied_server_reply(tmp_path
     with pytest.raises(AgentActionError, match="denied by policy"):
         request_action(path, "start_coding", {}, channel_id="D1", thread_ts="1.0")
     thread.join(1)
+
+
+def test_start_coding_approval_window_outlasts_the_operator_stepping_away(tmp_path):
+    """The session start is the only approval left, so its window is generous.
+
+    It still denies on timeout; a request that is never answered never runs.
+    """
+    server = make_direct_server(tmp_path)
+    assert server.timeout == 600.0

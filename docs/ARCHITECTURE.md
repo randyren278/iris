@@ -75,6 +75,14 @@ subtypes, duplicates and malformed envelopes, then applies the stable Slack-ID
 allowlist. Recognized explicit commands enter the deterministic router.
 Unrecognized text becomes a general-agent turn.
 
+Because that turn shells out to a model and takes seconds, the gateway posts a
+placeholder into the thread first and later edits the answer over it, so the
+thread ends up reading as one message. An explicit command answers from local
+state immediately and gets no placeholder, and neither does anything while the
+daemon is not online: Iris only promises an answer it expects to deliver. The
+placeholder is a courtesy and never blocks a reply — a failed post or edit
+falls back to posting the answer normally.
+
 The general agent is shown a fixed catalog. Read-only tools include weather,
 public web search/fetch, bounded workspace inspection, and quarantined senses
 when a store exists. In production it is also shown one consequential tool:
@@ -127,11 +135,24 @@ raw tool permissions.
 
 ## Claude coding approvals
 
-Claude Code sessions use Iris's `PreToolUse` hook. Before the subprocess starts,
-`SessionController` passes the exact Slack channel/thread into the launch
-environment. The hook renders the tool name plus bounded JSON arguments and
-sends them through `approval.sock`. The server routes the notice using the
-request's origin rather than whichever conversation happened most recently.
+A Claude coding session is gated when it starts: the operator approves the exact
+tool, project, and task in the originating Slack thread. It then runs its own
+tool calls under `--permission-mode bypassPermissions`, with no `PreToolUse`
+hook installed. A second gate on every call is what made delegated work
+unusable, and the launch approval is the decision that carries the authority.
+
+`bypassPermissions` rather than `auto`: when auto mode is unavailable the CLI
+silently falls back to manual, and a manual `--print` session with nothing to
+answer it denies every prompt-worthy call instead of asking. Claude Code still
+refuses deny-ruled tools and critical-path `rm`/`rmdir` in every mode.
+
+Setting `coding_autonomy = false` in `~/.iris/config.toml` restores per-call
+approval, and the rest of this section describes that mode. `Launcher` installs
+Iris's `PreToolUse` hook, and `SessionController` passes the exact Slack
+channel/thread into the launch environment before the subprocess starts. The
+hook renders the tool name plus bounded JSON arguments and sends them through
+`approval.sock`. The server routes the notice using the request's origin rather
+than whichever conversation happened most recently.
 
 Approval IDs are globally ordered. Bare `y`/`n` resolves the oldest request;
 `y <id>` / `n <id>` resolves one exact request, which is required when several
@@ -174,7 +195,7 @@ hook is implemented and live-tested.
 | Path | Model | Authority |
 | --- | --- | --- |
 | General Slack agent | `sonnet` | fixed Iris-run catalog; reads plus approval-bound `start_coding` |
-| Claude coding session | `opus` | project process; each tool call passes Iris PreToolUse approval |
+| Claude coding session | `opus` | project process; approval-bound start, then autonomous unless `coding_autonomy = false` |
 | Codex exec session | operator config | forced `workspace-write` sandbox |
 
 Every Claude subprocess passes `--setting-sources ""`, `--strict-mcp-config`,
@@ -222,7 +243,9 @@ vision:
 
 - General reasoning, bounded research, trusted-memory retrieval, Calendar
   quarantine reads, and approval-bound coding-session starts are wired.
-- Claude coding tool calls are approval-gated; Codex is sandbox-bounded.
+- Claude and Codex coding sessions are approval-gated at their start; Codex is
+  additionally sandbox-bounded, and Claude tool calls can be individually gated
+  with `coding_autonomy = false`.
 - The salience engine is **not wired** and remains shadow-mode scaffolding.
 - The user model is **not wired** into production conversation or planning.
 - The outcome ledger is **not wired** to session completion or capability
