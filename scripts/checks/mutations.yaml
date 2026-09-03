@@ -118,6 +118,11 @@ mutations:
   invariant: Iris's runtime dispatches the turn's tools rather than only startup-registered ones.
   find: '        available = {**self._handlers, **(handlers or {})}'
   replace: '        available = dict(self._handlers)'
+- id: web-search-fallback-dropped
+  file: iris/tools/web.py
+  invariant: News search falls back to an independent structured provider when Google News returns an invalid response.
+  find: 'GENERAL_SEARCH_ENDPOINT = "https://www.bing.com/search?format=rss"'
+  replace: 'GENERAL_SEARCH_ENDPOINT = NEWS_SEARCH_ENDPOINT'
 - id: socket-disconnect-not-reported
   file: iris/slack.py
   invariant: A dropped Socket Mode connection is recorded, so reported health is the socket's and not the process's.

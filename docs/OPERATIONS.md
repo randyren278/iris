@@ -111,8 +111,10 @@ the decision comes from that same origin.
 .venv/bin/python -m iris.weather_probe
 ```
 
-These make bounded public reads without Slack credentials. They prove provider
-reachability, not Slack delivery.
+These make bounded public reads without Slack credentials. The web probe
+requires both a non-empty search and a successful page fetch; it fails rather
+than treating a provider anti-bot response as an empty result set. They prove
+provider reachability, not Slack delivery.
 
 ## Calendar
 
