@@ -71,7 +71,7 @@ a daemon-owned local socket plus exact Slack approval.
 - **Converse and research.** A plain DM reaches the general-agent runtime with
   short-term thread context and trusted memory retrieval. Its fixed catalog,
   which Iris runs itself rather than handing to the model, can perform bounded
-  web, weather, workspace, and quarantined-sense reads.
+  web, weather, workspace, Messages-history, and quarantined-sense reads.
 - **Start coding from intent.** When a plain-English request is clearly asking
   Iris to carry out coding work, the agent can choose `claude` or `codex`, a
   project name, and a task. The daemon resolves the project beneath
@@ -94,6 +94,11 @@ a daemon-owned local socket plus exact Slack approval.
   operator can refresh upcoming events into `~/.iris/senses.json`. Those events
   remain `untrusted` quarantine data and are never promoted to trusted memory by
   ingestion alone.
+- **Search Messages history on demand.** An explicit request can search the
+  fixed local `~/Library/Messages/chat.db` read-only and return at most 20
+  recent matching snippets. Iris does not index, modify, or promote message
+  content into trusted memory. Returned snippets pass through the configured
+  Claude model as untrusted tool data so it can answer the request.
 - **Fail closed.** General-agent coding actions, malformed approval requests,
   missing sockets, timeouts, and explicit denials all stop at the authority
   boundary. `stop` persists a disarmed marker across daemon restarts and only
@@ -150,6 +155,11 @@ instead receives Iris's explicit PreToolUse approval hook and nothing else.
 **Prerequisites:** macOS, Python 3.13+, SwiftBar installed in `/Applications`, a
 Slack workspace where you can create an app, and locally installed/authenticated
 `claude` and `codex` CLIs.
+
+Messages search additionally requires Full Disk Access for the exact Python
+interpreter printed by `.venv/bin/python -c 'import sys; print(sys.executable)'`.
+Without that optional permission, the tool fails closed and the rest of Iris
+continues to work.
 
 ```sh
 brew install --cask swiftbar
@@ -300,6 +310,7 @@ coverage report -m
 # Live provider / CLI / local-control probes
 .venv/bin/python -m iris.weather_probe
 .venv/bin/python -m iris.web_probe
+.venv/bin/python -m iris.messages_probe
 .venv/bin/python -m iris.agent_probe
 .venv/bin/python -m iris.hook_probe
 .venv/bin/python -m iris.senses.calendar_probe

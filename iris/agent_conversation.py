@@ -49,8 +49,9 @@ class ClaudeToolAgentAdapter:
     run the operator's hooks over raw DM text.
     """
 
-    def __init__(self, workspace_root, senses_path, turns, context, *, action_socket=None,
-                 channel_id=None, thread_ts=None, run=subprocess.run, timeout=90, environ=None):
+    def __init__(self, workspace_root, senses_path, turns, context, *, messages_path=None,
+                 action_socket=None, channel_id=None, thread_ts=None, run=subprocess.run,
+                 timeout=90, environ=None):
         self._workspace_root = str(pathlib.Path(workspace_root).resolve())
         self._senses_path = str(pathlib.Path(senses_path))
         self._action_socket = str(action_socket) if action_socket else None
@@ -64,6 +65,7 @@ class ClaudeToolAgentAdapter:
         # and argument validation cannot drift between the two.
         self._tools = catalog(
             self._workspace_root, self._senses_path,
+            messages_path=messages_path,
             action_socket=self._action_socket, channel_id=channel_id, thread_ts=thread_ts,
         )
 

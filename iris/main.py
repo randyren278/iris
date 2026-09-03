@@ -1,5 +1,6 @@
 """Production Slack daemon."""
 import logging
+import pathlib
 
 from iris.config import load
 from iris.grammar import parse
@@ -124,6 +125,7 @@ def main():
             state_dir / "senses.json",
             turns,
             context,
+            messages_path=pathlib.Path.home() / "Library/Messages/chat.db",
             action_socket=action_server.path,
             channel_id=message.channel_id,
             thread_ts=message.reply_thread_ts,

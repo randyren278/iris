@@ -262,6 +262,7 @@ def test_main_composes_current_agentic_daemon_and_cleans_up(monkeypatch, tmp_pat
     assert adapter.kwargs == {
         "action_socket": state_dir / "agent-action.sock",
         "channel_id": "D1",
+        "messages_path": main_module.pathlib.Path.home() / "Library/Messages/chat.db",
         "thread_ts": "1.0",
     }
 

@@ -84,9 +84,11 @@ placeholder is a courtesy and never blocks a reply — a failed post or edit
 falls back to posting the answer normally.
 
 The general agent is shown a fixed catalog. Read-only tools include weather,
-public web search/fetch, bounded workspace inspection, and quarantined senses
-when a store exists. In production it is also shown one consequential tool:
-`start_coding`.
+public web search/fetch, bounded workspace inspection, on-demand Messages
+history search, and quarantined senses when a store exists. Messages search
+opens only the fixed local database in SQLite read-only mode, returns at most
+20 snippets, and treats every result as untrusted data. In production the
+catalog also contains one consequential tool: `start_coding`.
 
 Iris runs that catalog itself; the model never holds a tool handle. The nested
 Claude process is launched with no built-in tools and no MCP server, and plans
@@ -226,6 +228,7 @@ instructions.
 | Sessions | `~/.iris/sessions.json` | daemon-owned registry |
 | Memory | `~/.iris/memory.json` | operator-confirmed self/team claims only |
 | Senses | `~/.iris/senses.json` | untrusted, revocable source data |
+| Messages history | `~/Library/Messages/chat.db` | on-demand SQLite read-only; never indexed or trusted |
 | Audit | `~/.iris/audit.jsonl` | append-only bounded log |
 | Approval sockets | `~/.iris/*.sock` | mode `0600`, local process boundary |
 
@@ -241,8 +244,9 @@ and the provider exposes no Calendar write method.
 The current live scope is deliberately narrower than the long-term assistant
 vision:
 
-- General reasoning, bounded research, trusted-memory retrieval, Calendar
-  quarantine reads, and approval-bound coding-session starts are wired.
+- General reasoning, bounded research, trusted-memory retrieval, on-demand
+  read-only Messages search, Calendar quarantine reads, and approval-bound
+  coding-session starts are wired.
 - Claude and Codex coding sessions are approval-gated at their start; Codex is
   additionally sandbox-bounded, and Claude tool calls can be individually gated
   with `coding_autonomy = false`.

@@ -44,6 +44,7 @@ CLASSIFICATIONS = {
     "iris/agent_probe.py": "live-probe",
     "iris/weather_probe.py": "live-probe",
     "iris/web_probe.py": "live-probe",
+    "iris/messages_probe.py": "live-probe",
     "iris/senses/calendar_probe.py": "live-probe",
     "iris/salience.py": "planned-not-wired",
     "iris/user_model.py": "planned-not-wired",

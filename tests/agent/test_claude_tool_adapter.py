@@ -175,3 +175,11 @@ def test_production_adapter_exposes_senses_only_when_store_exists(tmp_path):
     adapter = ClaudeToolAgentAdapter(tmp_path, path, (), ())
     assert "senses" in adapter.tool_names
     assert "senses" in adapter.handlers()
+
+
+def test_production_adapter_exposes_messages_only_with_an_explicit_database_path(tmp_path):
+    adapter = ClaudeToolAgentAdapter(
+        tmp_path, tmp_path / "senses.json", (), (), messages_path=tmp_path / "chat.db"
+    )
+    assert "messages_search" in adapter.tool_names
+    assert "messages_search" in adapter.handlers()
