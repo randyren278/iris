@@ -9,13 +9,15 @@ import sys
 from iris.agent_actions import AgentActionError, request_action, validate_start_coding
 from iris.capability_runtime import CapabilityRequest
 from iris.senses import SenseStore
+from iris.tools.messages import MessagesSearch, validate_messages_arguments
 from iris.tools.senses import QuarantinedSenseReader, validate_sense_arguments
 from iris.tools.web import WebFetcher, validate_fetch_arguments, validate_search_arguments
 from iris.tools.workspace import WorkspaceInspector, validate_workspace_arguments
 from iris.weather import WeatherService
 
 
-def catalog(workspace_root, senses_path, *, action_socket=None, channel_id=None, thread_ts=None):
+def catalog(workspace_root, senses_path, *, messages_path=None, action_socket=None,
+            channel_id=None, thread_ts=None):
     weather, web, workspace = WeatherService(), WebFetcher(), WorkspaceInspector(workspace_root)
     tools = {
         "weather": (lambda args: weather(CapabilityRequest("weather", validate_weather_arguments(args))),
@@ -24,6 +26,13 @@ def catalog(workspace_root, senses_path, *, action_socket=None, channel_id=None,
         "web_fetch": (lambda args: web.fetch(validate_fetch_arguments(args)), {"url": {"type": "string"}}, ("url",)),
         "workspace": (lambda args: workspace(validate_workspace_arguments(args)), {"path": {"type": "string"}}, ("path",)),
     }
+    if messages_path:
+        messages = MessagesSearch(messages_path)
+        tools["messages_search"] = (
+            lambda args: messages.search(validate_messages_arguments(args)),
+            {"query": {"type": "string"}},
+            ("query",),
+        )
     if pathlib.Path(senses_path).exists():
         reader = QuarantinedSenseReader(SenseStore(senses_path))
         tools["senses"] = (lambda args: reader(validate_sense_arguments(args)), {}, ())
@@ -129,6 +138,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--workspace-root", required=True)
     parser.add_argument("--senses-path", required=True)
+    parser.add_argument("--messages-path")
     parser.add_argument("--action-socket")
     parser.add_argument("--channel-id")
     parser.add_argument("--thread-ts")
@@ -136,6 +146,7 @@ def main() -> int:
     serve(catalog(
         args.workspace_root,
         args.senses_path,
+        messages_path=args.messages_path,
         action_socket=args.action_socket,
         channel_id=args.channel_id,
         thread_ts=args.thread_ts,

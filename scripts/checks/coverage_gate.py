@@ -42,6 +42,7 @@ PRODUCTION_CRITICAL = (
     "iris/tool_protocol.py",
     "iris/tools/senses.py",
     "iris/tools/web.py",
+    "iris/tools/messages.py",
     "iris/tools/workspace.py",
 )
 

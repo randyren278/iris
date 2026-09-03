@@ -136,6 +136,25 @@ The sync stores only event identifier, start time, and title in
 Calendar content into trusted memory or authority. Sync is operator-run and
 there is no Calendar write capability.
 
+## Messages search
+
+Messages history search is on-demand, read-only, and bounded to 20 recent
+matching snippets. It reads the fixed `~/Library/Messages/chat.db` path without
+indexing or writing it. Returned snippets are sent to the configured Claude
+model as untrusted tool data only when the operator asks Iris to search them.
+
+Grant Full Disk Access to the exact interpreter printed by:
+
+```sh
+.venv/bin/python -c 'import sys; print(sys.executable)'
+```
+
+Then verify database access and decoding without printing message bodies:
+
+```sh
+.venv/bin/python -m iris.messages_probe
+```
+
 ## Slack connectivity
 
 ```sh

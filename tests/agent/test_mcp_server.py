@@ -97,6 +97,33 @@ def test_consequential_action_is_exposed_only_with_socket_and_exact_origin(tmp_p
     assert "read-only tool" in read_spec["description"]
 
 
+def test_catalog_exposes_messages_search_only_when_the_database_path_is_supplied(tmp_path, monkeypatch):
+    calls = []
+
+    class Messages:
+        def __init__(self, path):
+            calls.append(("init", path))
+
+        def search(self, arguments):
+            calls.append(("search", arguments))
+            return {"matches": []}
+
+    monkeypatch.setattr(mcp, "MessagesSearch", Messages)
+    monkeypatch.setattr(mcp, "validate_messages_arguments", lambda args: dict(args))
+
+    assert "messages_search" not in catalog(tmp_path, tmp_path / "senses.json")
+    tools = catalog(
+        tmp_path, tmp_path / "senses.json", messages_path=tmp_path / "chat.db"
+    )
+
+    assert "messages_search" in tools
+    dispatch(tools, "messages_search", {"query": "Lauren"})
+    assert calls == [
+        ("init", tmp_path / "chat.db"),
+        ("search", {"query": "Lauren"}),
+    ]
+
+
 def test_weather_argument_validation_is_strict_and_bounded():
     assert validate_weather_arguments({"location": "  Manila  "}) == {"location": "Manila"}
     assert len(validate_weather_arguments({"location": "x" * 250})["location"]) == 200
@@ -181,6 +208,7 @@ def test_mcp_main_passes_cli_origin_to_catalog_and_serve(monkeypatch, tmp_path):
     assert kwargs == {
         "action_socket": str(tmp_path / "action.sock"),
         "channel_id": "D1",
+        "messages_path": None,
         "thread_ts": "1.0",
     }
     assert set(captured["served"]) == {"fake"}
