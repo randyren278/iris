@@ -5,8 +5,13 @@ from iris.tools.web import WebFetcher
 
 
 def probe(fetcher=None) -> str:
-    result = (fetcher or WebFetcher()).fetch({"url": "https://example.com/"})
-    return f"Read-only web probe succeeded: {result['url']}"
+    fetcher = fetcher or WebFetcher()
+    search = fetcher.search({"query": "Iris web search probe"})
+    results = search.get("results")
+    if not isinstance(results, list) or not results:
+        raise ValueError("search returned no results")
+    result = fetcher.fetch({"url": "https://example.com/"})
+    return f"Read-only web search and fetch succeeded: {len(results)} result; {result['url']}"
 
 
 def main() -> int:

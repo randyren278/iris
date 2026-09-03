@@ -243,6 +243,10 @@ For weather, include a city: `what's the weather in Manila?` Iris returns
 bounded current conditions and provider attribution rather than guessing your
 location.
 
+Web research uses bounded HTTPS search with an independent provider fallback.
+The live web probe verifies both search results and page fetching, so an
+anti-bot page cannot be mistaken for a healthy empty search.
+
 `stop` survives daemon restarts. Re-enable control only from Terminal:
 
 ```sh

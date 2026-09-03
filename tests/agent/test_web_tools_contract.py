@@ -6,7 +6,7 @@ from iris.tools.web import (
     MAX_BYTES,
     WebFetcher,
     _NoRedirect,
-    _SearchResults,
+    _RssSearchResults,
     _public_host,
     validate_fetch_arguments,
     validate_search_arguments,
@@ -115,16 +115,12 @@ def test_fetch_replaces_invalid_utf8_in_provider_data():
     assert result["text"] == "hello�world"
 
 
-def test_search_builds_duckduckgo_query_parses_titles_and_caps_results(monkeypatch):
-    anchors = "".join(
-        f'<a class="result__a other" href="https://example.com/{index}"> Result <b>{index}</b> </a>'
+def test_general_search_uses_structured_feed_parses_titles_and_caps_results(monkeypatch):
+    items = "".join(
+        f'<item><title>Result {index}</title><link>https://example.com/{index}</link></item>'
         for index in range(10)
     )
-    document = (
-        '<a class="unrelated" href="https://ignore.example">ignore</a>'
-        '<a class="result__a" href="https://blank.example">   </a>'
-        + anchors
-    )
+    document = "<rss><channel>" + items + "</channel></rss>"
     fetcher = WebFetcher()
     seen = []
 
@@ -135,13 +131,90 @@ def test_search_builds_duckduckgo_query_parses_titles_and_caps_results(monkeypat
     monkeypatch.setattr(fetcher, "fetch", fake_fetch)
     result = fetcher.search({"query": "iris agent"})
 
-    assert seen == [{"url": "https://html.duckduckgo.com/html/?q=iris+agent"}]
+    assert seen == [{"url": "https://www.bing.com/search?format=rss&q=iris+agent"}]
     assert result["query"] == "iris agent"
     assert len(result["results"]) == 8
     assert result["results"][0] == {"title": "Result 0", "url": "https://example.com/0"}
 
 
-def test_search_parser_ignores_data_outside_active_result_link():
-    parser = _SearchResults()
-    parser.feed("prefix<a class='result__a' href='https://e'>hello<span> world</span></a>suffix")
+def test_search_parser_ignores_data_outside_an_rss_item():
+    parser = _RssSearchResults()
+    parser.feed(
+        "<title>channel</title><rss><channel><item><title>hello world</title>"
+        "<link>https://e</link></item></channel></rss>"
+    )
     assert parser.results == [{"title": "hello world", "url": "https://e"}]
+
+
+def test_news_search_uses_google_news_structured_feed(monkeypatch):
+    rss = (
+        "<rss><channel><item><title>Manila story</title>"
+        "<link>https://news.example/story</link></item></channel></rss>"
+    )
+    fetcher = WebFetcher()
+    seen = []
+
+    def fake_fetch(arguments):
+        seen.append(arguments)
+        return {"text": rss}
+
+    monkeypatch.setattr(fetcher, "fetch", fake_fetch)
+
+    assert fetcher.search({"query": "latest news in Manila"}) == {
+        "query": "latest news in Manila",
+        "results": [{"title": "Manila story", "url": "https://news.example/story"}],
+    }
+    assert seen == [
+        {"url": "https://news.google.com/rss/search?hl=en-CA&gl=CA&ceid=CA:en&q=latest+news+in+Manila"},
+    ]
+
+
+def test_news_search_falls_back_to_independent_feed_when_google_response_is_invalid(monkeypatch):
+    rss = (
+        "<rss><channel><title>Search</title><item>"
+        "<title>Manila update</title><link>https://news.example/update</link>"
+        "</item></channel></rss>"
+    )
+    fetcher = WebFetcher()
+    documents = iter(("<html>not a feed</html>", rss))
+    seen = []
+
+    def fake_fetch(arguments):
+        seen.append(arguments)
+        return {"text": next(documents)}
+
+    monkeypatch.setattr(fetcher, "fetch", fake_fetch)
+
+    result = fetcher.search({"query": "Manila news"})
+
+    assert result["results"] == [
+        {"title": "Manila update", "url": "https://news.example/update"}
+    ]
+    assert seen[-1] == {"url": "https://www.bing.com/search?format=rss&q=Manila+news"}
+
+
+def test_search_distinguishes_no_matches_from_invalid_provider_responses(monkeypatch):
+    fetcher = WebFetcher()
+    monkeypatch.setattr(
+        fetcher, "fetch", lambda _arguments: {"text": "<rss><channel></channel></rss>"}
+    )
+    assert fetcher.search({"query": "no such page"}) == {
+        "query": "no such page", "results": []
+    }
+
+    monkeypatch.setattr(fetcher, "fetch", lambda _arguments: {"text": "<html>blocked</html>"})
+    with pytest.raises(ValueError, match="invalid responses"):
+        fetcher.search({"query": "no such page"})
+
+
+def test_search_parser_drops_incomplete_or_unsafe_result_links():
+    parser = _RssSearchResults()
+    parser.feed(
+        "<rss><channel>"
+        "<item><title>HTTP</title><link>http://example.com</link></item>"
+        "<item><title>No host</title><link>https:///missing</link></item>"
+        "<item><title>Credentials</title><link>https://user@example.com</link></item>"
+        "<item><link>https://example.com/no-title</link></item>"
+        "</channel></rss>"
+    )
+    assert parser.results == []

@@ -3,12 +3,16 @@ from __future__ import annotations
 
 import html.parser
 import ipaddress
+import re
 import socket
 from urllib.parse import urlencode, urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 
 MAX_BYTES = 64_000
+NEWS_SEARCH_ENDPOINT = "https://news.google.com/rss/search?hl=en-CA&gl=CA&ceid=CA:en"
+GENERAL_SEARCH_ENDPOINT = "https://www.bing.com/search?format=rss"
+_NEWS_QUERY = re.compile(r"\b(?:news|latest|breaking|today|current events?)\b", re.IGNORECASE)
 
 
 def _public_host(host: str, resolver=socket.getaddrinfo) -> None:
@@ -59,32 +63,59 @@ class WebFetcher:
             return {"url": response.geturl(), "text": response.read(MAX_BYTES + 1).decode("utf-8", "replace")[:MAX_BYTES]}
 
     def search(self, arguments: dict[str, object]) -> dict[str, object]:
-        url = "https://html.duckduckgo.com/html/?" + urlencode({"q": arguments["query"]})
-        document = self.fetch({"url": url})["text"]
-        parser = _SearchResults()
-        parser.feed(document)
-        return {"query": arguments["query"], "results": parser.results[:8]}
+        reachable = 0
+        endpoints = (
+            (NEWS_SEARCH_ENDPOINT, GENERAL_SEARCH_ENDPOINT)
+            if _NEWS_QUERY.search(str(arguments["query"]))
+            else (GENERAL_SEARCH_ENDPOINT, NEWS_SEARCH_ENDPOINT)
+        )
+        for endpoint in endpoints:
+            url = endpoint + "&" + urlencode({"q": arguments["query"]})
+            document = self.fetch({"url": url})["text"]
+            if "<rss" not in document or "<channel" not in document:
+                continue
+            reachable += 1
+            parser = _RssSearchResults()
+            parser.feed(document)
+            if parser.results:
+                return {"query": arguments["query"], "results": parser.results[:8]}
+        if not reachable:
+            raise ValueError("search providers returned invalid responses")
+        return {"query": arguments["query"], "results": []}
 
 
-class _SearchResults(html.parser.HTMLParser):
+def _result_url(href: str) -> str | None:
+    parsed = urlparse(href)
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+        return None
+    return href
+
+
+class _RssSearchResults(html.parser.HTMLParser):
     def __init__(self):
         super().__init__()
         self.results: list[dict[str, str]] = []
-        self._href: str | None = None
+        self._item: dict[str, str] | None = None
+        self._field: str | None = None
         self._text: list[str] = []
 
-    def handle_starttag(self, tag, attrs):
-        values = dict(attrs)
-        if tag == "a" and "result__a" in values.get("class", ""):
-            self._href, self._text = values.get("href", ""), []
+    def handle_starttag(self, tag, _attrs):
+        if tag == "item":
+            self._item = {}
+        elif self._item is not None and tag in {"title", "link"}:
+            self._field, self._text = tag, []
 
     def handle_data(self, data):
-        if self._href is not None:
+        if self._field is not None:
             self._text.append(data)
 
     def handle_endtag(self, tag):
-        if tag == "a" and self._href is not None:
-            title = "".join(self._text).strip()
-            if title:
-                self.results.append({"title": title, "url": self._href})
-            self._href = None
+        if self._item is not None and tag == self._field:
+            self._item[tag] = "".join(self._text).strip()
+            self._field = None
+        elif tag == "item" and self._item is not None:
+            url = _result_url(self._item.get("link", ""))
+            title = self._item.get("title", "")
+            if title and url:
+                self.results.append({"title": title, "url": url})
+            self._item = None
